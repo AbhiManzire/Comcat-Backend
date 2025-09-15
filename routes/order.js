@@ -1,0 +1,523 @@
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
+const Order = require('../models/Order');
+const Notification = require('../models/Notification');
+const { sendOrderConfirmation } = require('../services/emailService');
+
+const router = express.Router();
+
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+
+// Middleware to verify JWT token
+const authenticateToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ message: 'Access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+    req.userId = decoded.userId;
+    req.userRole = decoded.role;
+    next();
+  });
+};
+
+// Import middleware from auth.js
+const { requireBackOffice } = require('../middleware/auth');
+
+// Get all orders (Back Office)
+router.get('/', authenticateToken, requireBackOffice, async (req, res) => {
+  try {
+    const orders = await Order.find()
+      .populate('customer', 'firstName lastName email companyName')
+      .populate('quotation', 'quotationNumber')
+      .populate('inquiry', 'inquiryNumber')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      orders
+    });
+
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Create order from quotation
+router.post('/', authenticateToken, [
+  body('quotationId').notEmpty().withMessage('Quotation ID is required'),
+  body('paymentMethod').isIn(['online', 'cod']).withMessage('Valid payment method is required'),
+  body('totalAmount').isFloat({ min: 0 }).withMessage('Valid total amount is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { quotationId, paymentMethod, totalAmount, parts, customer, deliveryAddress } = req.body;
+
+    // Check if quotation exists and is accepted
+    const Quotation = require('../models/Quotation');
+    const quotation = await Quotation.findById(quotationId)
+      .populate('inquiry', 'inquiryNumber customer deliveryAddress specialInstructions')
+      .populate({
+        path: 'inquiry',
+        populate: {
+          path: 'customer',
+          select: 'firstName lastName email companyName phoneNumber'
+        }
+      });
+
+    if (!quotation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found'
+      });
+    }
+
+    if (quotation.status !== 'accepted') {
+      return res.status(400).json({
+        success: false,
+        message: 'Quotation must be accepted before creating order'
+      });
+    }
+
+    // Create order
+    const order = new Order({
+      quotation: quotationId,
+      inquiry: quotation.inquiry._id,
+      customer: req.userId,
+      parts: parts || quotation.parts,
+      totalAmount: totalAmount || quotation.totalAmount,
+      payment: {
+        method: paymentMethod === 'online' ? 'credit_card' : 'pending',
+        status: paymentMethod === 'online' ? 'pending' : 'completed',
+        amount: totalAmount || quotation.totalAmount
+      },
+      status: paymentMethod === 'online' ? 'pending' : 'confirmed',
+      deliveryAddress: deliveryAddress || quotation.inquiry.deliveryAddress,
+      specialInstructions: quotation.inquiry.specialInstructions
+    });
+
+    await order.save();
+
+    // Update quotation status
+    quotation.status = 'order_created';
+    quotation.order = order._id;
+    await quotation.save();
+
+    // Send order confirmation email
+    try {
+      await sendOrderConfirmation(order);
+    } catch (emailError) {
+      console.error('Order confirmation email failed:', emailError);
+      // Don't fail the operation if email fails
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Order created successfully',
+      order: {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        totalAmount: order.totalAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('Create order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+  }
+});
+
+// Get order by ID or Order Number
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    let order;
+
+    // Check if id is a MongoDB ObjectId (24 hex characters) or order number
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test(id);
+    
+    if (isObjectId) {
+      // Search by MongoDB ObjectId
+      order = await Order.findById(id)
+        .populate('customer', 'firstName lastName email companyName phone')
+        .populate('quotation', 'quotationNumber parts totalAmount')
+        .populate('inquiry', 'inquiryNumber files parts deliveryAddress specialInstructions');
+    } else {
+      // Search by order number
+      order = await Order.findOne({ orderNumber: id })
+        .populate('customer', 'firstName lastName email companyName phone')
+        .populate('quotation', 'quotationNumber parts totalAmount')
+        .populate('inquiry', 'inquiryNumber files parts deliveryAddress specialInstructions');
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Check if user has access to this order
+    if (req.userRole !== 'admin' && req.userRole !== 'backoffice' && order.customer._id.toString() !== req.userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    res.json({
+      success: true,
+      order
+    });
+
+  } catch (error) {
+    console.error('Get order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+  }
+});
+
+// Update order delivery time (Back Office)
+router.put('/:id/delivery-time', authenticateToken, requireBackOffice, [
+  body('estimatedDelivery').isISO8601().withMessage('Valid delivery date is required'),
+  body('notes').optional().isString()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { estimatedDelivery, notes } = req.body;
+
+    const order = await Order.findById(req.params.id)
+      .populate('customer', 'firstName lastName email phoneNumber');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Update order with delivery time
+    order.production.estimatedCompletion = new Date(estimatedDelivery);
+    if (notes) {
+      order.production.notes = notes;
+    }
+    order.status = 'in_production';
+    order.updatedAt = new Date();
+
+    await order.save();
+
+    // Send delivery confirmation email to customer
+    try {
+      await sendOrderConfirmation(order);
+      console.log('Order confirmation email sent to customer:', order.customer.email);
+    } catch (emailError) {
+      console.error('Delivery confirmation email failed:', emailError);
+      // Don't fail the operation if email fails
+    }
+
+    res.json({
+      success: true,
+      message: 'Delivery time updated and customer notified',
+      order: {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        estimatedDelivery: order.production.estimatedCompletion
+      }
+    });
+
+  } catch (error) {
+    console.error('Update delivery time error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Update order status (Back Office)
+router.put('/:id/status', authenticateToken, requireBackOffice, [
+  body('status').isIn(['pending', 'confirmed', 'in_production', 'ready_for_dispatch', 'dispatched', 'delivered', 'cancelled']).withMessage('Invalid status'),
+  body('notes').optional().isString()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { status, notes } = req.body;
+
+    const order = await Order.findById(req.params.id)
+      .populate('customer', 'firstName lastName email phoneNumber');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    const oldStatus = order.status;
+    order.status = status;
+    order.updatedAt = new Date();
+
+    // Update payment status based on order status
+    if (!order.payment) {
+      order.payment = {};
+    }
+    
+    // Set payment status based on order status
+    if (status === 'delivered' || status === 'dispatched' || status === 'ready_for_dispatch' || status === 'in_production' || status === 'confirmed') {
+      order.payment.status = 'completed';
+      if (!order.payment.paidAt) {
+        order.payment.paidAt = new Date();
+      }
+      if (!order.payment.method || order.payment.method === 'pending') {
+        order.payment.method = 'bank_transfer';
+      }
+    } else if (status === 'cancelled') {
+      order.payment.status = 'refunded';
+    }
+
+    // Set specific timestamps based on status
+    if (status === 'confirmed' && !order.confirmedAt) {
+      order.confirmedAt = new Date();
+    } else if (status === 'in_production' && !order.production.startDate) {
+      order.production.startDate = new Date();
+    } else if (status === 'ready_for_dispatch') {
+      order.production.actualCompletion = new Date();
+    } else if (status === 'dispatched') {
+      order.dispatch.dispatchedAt = new Date();
+    } else if (status === 'delivered') {
+      order.dispatch.actualDelivery = new Date();
+    }
+
+    if (notes) {
+      order.notes = notes;
+    }
+
+    await order.save();
+
+    // Send status update email to customer
+    try {
+      await sendOrderConfirmation(order);
+      console.log('Order status update email sent to customer:', order.customer.email);
+    } catch (emailError) {
+      console.error('Status update email failed:', emailError);
+      // Don't fail the operation if email fails
+    }
+
+    // Create notification for customer if status changed to dispatched
+  // Create notification for customer if status changed to dispatched
+if (status === 'dispatched' && oldStatus !== 'dispatched') {
+  await Notification.createNotification({
+    title: 'Order Dispatched',
+    message: `Your order ${order.orderNumber} has been dispatched! ${order.dispatch && order.dispatch.trackingNumber ? `Tracking Number: ${order.dispatch.trackingNumber}` : ''} ${order.dispatch && order.dispatch.courier ? `Courier: ${order.dispatch.courier}` : ''}.`,
+    type: 'success',
+    userId: order.customer._id,
+    relatedEntity: {
+      type: 'order',
+      entityId: order._id
+    },
+    metadata: {
+      orderNumber: order.orderNumber,
+      trackingNumber: order.dispatch ? order.dispatch.trackingNumber : null,
+      courier: order.dispatch ? order.dispatch.courier : null,
+      dispatchedAt: new Date()
+    }
+  });
+}
+
+    res.json({
+      success: true,
+      message: 'Order status updated and customer notified',
+      order: {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        updatedAt: order.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Update order status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Update dispatch details (Back Office)
+router.put('/:id/dispatch', authenticateToken, requireBackOffice, [
+  body('courier').notEmpty().withMessage('Courier name is required'),
+  body('trackingNumber').notEmpty().withMessage('Tracking number is required'),
+  body('estimatedDelivery').optional().isISO8601().withMessage('Valid delivery date is required'),
+  body('notes').optional().isString()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { courier, trackingNumber, estimatedDelivery, notes } = req.body;
+
+    const order = await Order.findById(req.params.id)
+      .populate('customer', 'firstName lastName email phoneNumber');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Update dispatch details
+    order.dispatch.courier = courier;
+    order.dispatch.trackingNumber = trackingNumber;
+    order.dispatch.dispatchedAt = new Date();
+    order.status = 'dispatched';
+    
+    if (estimatedDelivery) {
+      order.dispatch.estimatedDelivery = new Date(estimatedDelivery);
+    }
+    
+    if (notes) {
+      order.dispatch.notes = notes;
+    }
+
+    order.updatedAt = new Date();
+    await order.save();
+
+    // Send dispatch notification email to customer
+    try {
+      await sendOrderConfirmation(order);
+      console.log('Dispatch notification email sent to customer:', order.customer.email);
+    } catch (emailError) {
+      console.error('Dispatch notification email failed:', emailError);
+      // Don't fail the operation if email fails
+    }
+
+    // Create notification for customer
+    try {
+      await Notification.createNotification({
+        title: 'Order Dispatched',
+        message: `Your order ${order.orderNumber} has been dispatched! Tracking Number: ${order.dispatch.trackingNumber}, Courier: ${order.dispatch.courier}. Estimated delivery: ${order.dispatch.estimatedDelivery ? new Date(order.dispatch.estimatedDelivery).toLocaleDateString() : 'TBD'}.`,
+        type: 'success',
+        userId: order.customer._id,
+        relatedEntity: {
+          type: 'order',
+          entityId: order._id
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          trackingNumber: order.dispatch.trackingNumber,
+          courier: order.dispatch.courier,
+          estimatedDelivery: order.dispatch.estimatedDelivery,
+          dispatchedAt: order.dispatch.dispatchedAt
+        }
+      });
+      
+      console.log(`Created dispatch notification for customer: ${order.customer.email}`);
+    } catch (notificationError) {
+      console.error('Failed to create dispatch notification:', notificationError);
+      // Don't fail the operation if notification creation fails
+    }
+
+    res.json({
+      success: true,
+      message: 'Dispatch details updated and customer notified',
+      order: {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        dispatch: order.dispatch
+      }
+    });
+
+  } catch (error) {
+    console.error('Update dispatch details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Get customer orders
+router.get('/customer/:customerId', authenticateToken, async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    // Check if user is accessing their own orders or is admin/backoffice
+    if (req.userId !== customerId && !['admin', 'backoffice'].includes(req.userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    const orders = await Order.find({ customer: customerId })
+      .populate('quotation', 'quotationNumber')
+      .populate('inquiry', 'inquiryNumber')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      orders
+    });
+
+  } catch (error) {
+    console.error('Get customer orders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+module.exports = router;

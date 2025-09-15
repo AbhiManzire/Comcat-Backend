@@ -1,0 +1,48 @@
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const User = require('../models/User');
+
+const createAdminUser = async () => {
+  try {
+    // Connect to MongoDB
+    await mongoose.connect('mongodb://localhost:27017/komacut');
+    console.log('Connected to MongoDB');
+
+    // Check if admin user already exists
+    const existingAdmin = await User.findOne({ email: 'admin@247cutbend.com' });
+    if (existingAdmin) {
+      console.log('Admin user already exists:', existingAdmin.email);
+      process.exit(0);
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash('admin123', 10);
+
+    // Create admin user
+    const adminUser = new User({
+      firstName: 'Admin',
+      lastName: 'User',
+      email: 'admin@247cutbend.com',
+      password: hashedPassword,
+      phoneNumber: '9876543210',
+      companyName: '247 Cutbend',
+      department: 'Administration',
+      country: 'India',
+      role: 'admin',
+      isActive: true
+    });
+
+    await adminUser.save();
+    console.log('✅ Admin user created successfully!');
+    console.log('Email: admin@247cutbend.com');
+    console.log('Password: admin123');
+    console.log('Role: admin');
+
+  } catch (error) {
+    console.error('Error creating admin user:', error);
+  } finally {
+    process.exit(0);
+  }
+};
+
+createAdminUser();
