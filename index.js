@@ -58,7 +58,19 @@ app.use(helmet({
 }));
 
 
-app.use(cors());
+// CORS configuration for production
+const corsOptions = {
+  origin: [
+    'https://strong-pastelito-aa3ea2.netlify.app',
+    'http://localhost:3000',
+    'http://localhost:3001'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
