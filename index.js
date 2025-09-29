@@ -60,12 +60,7 @@ app.use(helmet({
 
 // CORS configuration for production
 const corsOptions = {
-  origin: [
-    'https://fascinating-marzipan-8843ab.netlify.app',
-    'https://strong-pastelito-aa3ea2.netlify.app',
-    'http://localhost:3000',
-    'http://localhost:3001'
-  ],
+  origin: true, // Allow all origins for now
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
