@@ -116,9 +116,12 @@ app.get('/download-test-files', (req, res) => {
 });
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://damsole:Damsole@cluster0.mwqeffk.mongodb.net/mearnsneakers', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://damsole:Damsole@cluster0.mwqeffk.mongodb.net/komacut?retryWrites=true&w=majority';
+
+mongoose.connect(MONGODB_URI, {
+  // Modern MongoDB driver options
+  serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
+  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
 })
 .then(() => {
   console.log('Connected to MongoDB');
@@ -126,12 +129,16 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://damsole:Damsole@clust
     console.log(`Server running on port ${PORT}`);
     console.log(`Uploads directory: ${uploadsDir}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`MongoDB URI: ${process.env.MONGODB_URI || 'mongodb+srv://damsole:Damsole@cluster0.mwqeffk.mongodb.net/mearnsneakers'}`);
+    console.log(`MongoDB URI: ${MONGODB_URI}`);
   });
 })
 .catch((error) => {
   console.error('MongoDB connection error:', error);
   console.error('Please ensure MongoDB is running and accessible');
+  console.error('If using MongoDB Atlas, check your network access and connection string');
+  console.error('If using local MongoDB, ensure MongoDB service is running');
+  
+  // Exit process if MongoDB connection fails
   process.exit(1);
 });
 

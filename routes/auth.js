@@ -7,7 +7,7 @@ const { sendWelcomeEmail } = require('../services/emailService');
 const router = express.Router();
 
 // JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-here-make-it-very-long-and-secure-for-production-use';
 
 // Generate JWT Token
 const generateToken = (userId, role) => {
@@ -191,7 +191,7 @@ router.get('/profile', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+    const user = await User.findById(decoded.id || decoded.userId);
     
     if (!user) {
       return res.status(404).json({
@@ -232,7 +232,7 @@ router.put('/profile', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+    const user = await User.findById(decoded.id || decoded.userId);
     
     if (!user) {
       return res.status(404).json({

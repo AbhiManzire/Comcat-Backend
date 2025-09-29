@@ -19,8 +19,8 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ message: 'Invalid token' });
     }
-    req.userId = decoded.userId;
-    req.userRole = decoded.role;
+    req.userId = decoded.id || decoded.userId;
+    req.userRole = decoded.type || decoded.role;
     next();
   });
 };
@@ -80,9 +80,23 @@ router.patch('/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     
+    console.log('=== MARK NOTIFICATION AS READ ===');
+    console.log('Notification ID:', id);
+    console.log('User ID:', req.userId);
+    
     const notification = await Notification.findOne({ _id: id, userId: req.userId });
     
     if (!notification) {
+      console.log('Notification not found for user:', req.userId);
+      
+      // Check if notification exists at all
+      const anyNotification = await Notification.findOne({ _id: id });
+      if (anyNotification) {
+        console.log('Notification exists but belongs to different user:', anyNotification.userId);
+      } else {
+        console.log('Notification does not exist in database');
+      }
+      
       return res.status(404).json({
         success: false,
         message: 'Notification not found'

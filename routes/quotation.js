@@ -253,10 +253,11 @@ router.post('/:id/response', authenticateToken, [
 // Create quotation from inquiry (Back Office with permission check)
 router.post('/', authenticateToken, requireQuotationPermission, [
   body('inquiryId').notEmpty().withMessage('Inquiry ID is required'),
-  body('parts').isArray({ min: 1 }).withMessage('At least one part is required'),
-  body('parts.*.partRef').notEmpty().withMessage('Part reference is required'),
-  body('parts.*.unitPrice').isFloat({ min: 0 }).withMessage('Valid unit price is required'),
-  body('parts.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
+  body('parts').isArray().withMessage('Parts must be an array'),
+  body('parts.*.partRef').optional().notEmpty().withMessage('Part reference is required'),
+  body('parts.*.unitPrice').optional().isFloat({ min: 0 }).withMessage('Valid unit price is required'),
+  body('parts.*.quantity').optional().isInt({ min: 1 }).withMessage('Valid quantity is required'),
+  body('totalAmount').isFloat({ min: 0 }).withMessage('Valid total amount is required'),
   body('terms').optional().isString(),
   body('notes').optional().isString()
 ], async (req, res) => {
@@ -270,7 +271,7 @@ router.post('/', authenticateToken, requireQuotationPermission, [
       });
     }
 
-    const { inquiryId, parts, terms, notes, validUntil } = req.body;
+    const { inquiryId, parts, totalAmount, terms, notes, validUntil, isUploadQuotation } = req.body;
 
     // Check if inquiry exists
     const inquiry = await Inquiry.findById(inquiryId);
@@ -281,6 +282,25 @@ router.post('/', authenticateToken, requireQuotationPermission, [
       });
     }
 
+    // Handle parts and total amount based on mode
+    let processedParts = [];
+    let finalTotalAmount = 0;
+
+    if (isUploadQuotation) {
+      // Upload quotation mode - use provided total amount
+      processedParts = [];
+      finalTotalAmount = totalAmount;
+    } else {
+      // Manual entry mode - calculate from parts
+      processedParts = parts.map(part => ({
+        ...part,
+        totalPrice: part.unitPrice * part.quantity,
+        created: new Date(),
+        modified: new Date()
+      }));
+      finalTotalAmount = processedParts.reduce((total, part) => total + part.totalPrice, 0);
+    }
+
     // Check if quotation already exists for this inquiry
     const existingQuotation = await Quotation.findOne({ inquiry: inquiryId });
     if (existingQuotation) {
@@ -288,10 +308,11 @@ router.post('/', authenticateToken, requireQuotationPermission, [
       if (existingQuotation.status === 'draft') {
         // Update existing quotation
         existingQuotation.parts = processedParts;
-        existingQuotation.totalAmount = totalAmount;
+        existingQuotation.totalAmount = finalTotalAmount;
         existingQuotation.terms = terms || 'Standard manufacturing terms apply. Payment required before production begins.';
         existingQuotation.notes = notes;
         existingQuotation.validUntil = validUntil ? new Date(validUntil) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        existingQuotation.isUploadQuotation = isUploadQuotation || false;
         existingQuotation.updatedAt = new Date();
         
         await existingQuotation.save();
@@ -320,26 +341,16 @@ router.post('/', authenticateToken, requireQuotationPermission, [
       }
     }
 
-    // Calculate total prices for parts
-    const processedParts = parts.map(part => ({
-      ...part,
-      totalPrice: part.unitPrice * part.quantity,
-      created: new Date(),
-      modified: new Date()
-    }));
-
-    // Calculate total amount
-    const totalAmount = processedParts.reduce((total, part) => total + part.totalPrice, 0);
-
     // Create quotation
     const quotation = new Quotation({
       inquiry: inquiryId,
       parts: processedParts,
-      totalAmount,
+      totalAmount: finalTotalAmount,
       terms: terms || 'Standard manufacturing terms apply. Payment required before production begins.',
       notes,
       validUntil: validUntil ? new Date(validUntil) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      preparedBy: req.userId
+      preparedBy: req.userId,
+      isUploadQuotation: isUploadQuotation || false
     });
 
     await quotation.save();
@@ -366,6 +377,49 @@ router.post('/', authenticateToken, requireQuotationPermission, [
       success: false,
       message: 'Internal server error',
       error: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+  }
+});
+
+// Get customer quotations (Customer access)
+router.get('/customer', authenticateToken, async (req, res) => {
+  try {
+    // Only allow customers to access their own quotations
+    if (req.userRole !== 'customer') {
+      return res.status(403).json({
+        success: false,
+        message: 'Customer access required'
+      });
+    }
+
+    const quotations = await Quotation.find()
+      .populate({
+        path: 'inquiry',
+        select: 'inquiryNumber customer files parts deliveryAddress specialInstructions',
+        populate: {
+          path: 'customer',
+          select: 'firstName lastName email companyName phoneNumber',
+          match: { _id: req.userId }
+        }
+      })
+      .populate('preparedBy', 'firstName lastName')
+      .sort({ createdAt: -1 });
+
+    // Filter out quotations where customer doesn't match
+    const customerQuotations = quotations.filter(quotation => 
+      quotation.inquiry && quotation.inquiry.customer
+    );
+
+    res.json({
+      success: true,
+      quotations: customerQuotations
+    });
+
+  } catch (error) {
+    console.error('Get customer quotations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
     });
   }
 });

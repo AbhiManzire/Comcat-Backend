@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/mearnsneakers', {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://damsole:Damsole@cluster0.mwqeffk.mongodb.net/komacut?retryWrites=true&w=majority', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
@@ -31,14 +31,12 @@ async function createCustomerUser() {
       return;
     }
 
-    // Create customer user
-    const hashedPassword = await bcrypt.hash('password123', 10);
-    
+    // Create customer user - let the User model handle password hashing
     const customerUser = new User({
       firstName: 'John',
       lastName: 'Doe',
       email: 'customer@example.com',
-      password: hashedPassword,
+      password: 'password123', // Let the pre-save hook hash this
       role: 'customer',
       phoneNumber: '+1234567890',
       companyName: 'Test Company',

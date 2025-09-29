@@ -2,8 +2,47 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Order = require('../models/Order');
+const Inquiry = require('../models/Inquiry');
+const Quotation = require('../models/Quotation');
 const { authenticateToken, requireAdmin, requireBackOffice } = require('../middleware/auth');
 const router = express.Router();
+
+// Get dashboard statistics (Admin/Back Office)
+router.get('/dashboard/stats', authenticateToken, requireBackOffice, async (req, res) => {
+  try {
+    // Get counts in parallel for better performance
+    const [
+      totalInquiries,
+      totalQuotations,
+      activeOrders,
+      completedOrders
+    ] = await Promise.all([
+      Inquiry.countDocuments(),
+      Quotation.countDocuments(),
+      Order.countDocuments({ 
+        status: { $in: ['confirmed', 'in_production', 'ready_for_dispatch', 'dispatched'] } 
+      }),
+      Order.countDocuments({ status: 'delivered' })
+    ]);
+
+    res.json({
+      success: true,
+      stats: {
+        inquiries: totalInquiries,
+        quotations: totalQuotations,
+        orders: activeOrders,
+        completed: completedOrders
+      }
+    });
+
+  } catch (error) {
+    console.error('Dashboard stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
 
 // Get all orders (Admin/Back Office)
 router.get('/orders', authenticateToken, requireBackOffice, async (req, res) => {

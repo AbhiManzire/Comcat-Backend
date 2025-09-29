@@ -21,8 +21,8 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ message: 'Invalid token' });
     }
-    req.userId = decoded.userId;
-    req.userRole = decoded.role;
+    req.userId = decoded.id || decoded.userId;
+    req.userRole = decoded.type || decoded.role;
     next();
   });
 };

@@ -21,14 +21,45 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ message: 'Invalid token' });
     }
-    req.userId = decoded.userId;
-    req.userRole = decoded.role;
+    req.userId = decoded.id || decoded.userId;
+    req.userRole = decoded.type || decoded.role;
     next();
   });
 };
 
 // Import middleware from auth.js
 const { requireBackOffice } = require('../middleware/auth');
+
+// Get customer orders (Customer access)
+router.get('/customer', authenticateToken, async (req, res) => {
+  try {
+    // Only allow customers to access their own orders
+    if (req.userRole !== 'customer') {
+      return res.status(403).json({
+        success: false,
+        message: 'Customer access required'
+      });
+    }
+
+    const orders = await Order.find({ customer: req.userId })
+      .populate('customer', 'firstName lastName email companyName')
+      .populate('quotation', 'quotationNumber')
+      .populate('inquiry', 'inquiryNumber')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      orders
+    });
+
+  } catch (error) {
+    console.error('Get customer orders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
 
 // Get all orders (Back Office)
 router.get('/', authenticateToken, requireBackOffice, async (req, res) => {

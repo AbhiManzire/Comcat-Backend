@@ -56,6 +56,10 @@ const quotationSchema = new mongoose.Schema({
     default: 'Standard manufacturing terms apply. Payment required before production begins.'
   },
   notes: String,
+  isUploadQuotation: {
+    type: Boolean,
+    default: false
+  },
   preparedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

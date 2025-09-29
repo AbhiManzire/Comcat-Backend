@@ -504,6 +504,13 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
 
     await inquiry.save();
     console.log('Inquiry saved successfully:', inquiry._id);
+    console.log('Inquiry details:', {
+      id: inquiry._id,
+      inquiryNumber: inquiry.inquiryNumber,
+      customer: inquiry.customer,
+      partsCount: inquiry.parts.length,
+      filesCount: inquiry.files.length
+    });
 
     // Populate customer data for notification
     await inquiry.populate('customer', 'firstName lastName email companyName phoneNumber');
@@ -653,8 +660,14 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
   try {
     const { id } = req.params;
     
+    console.log('=== ADMIN INQUIRY REQUEST ===');
+    console.log('Inquiry ID:', id);
+    console.log('User ID:', req.userId);
+    console.log('User role:', req.user?.role);
+    
     // Check if ID is valid
     if (!id || id === 'undefined' || id === 'null') {
+      console.log('Invalid ID provided:', id);
       return res.status(400).json({
         success: false,
         message: 'Invalid inquiry ID provided',
@@ -871,6 +884,106 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Download file from inquiry
+router.get('/:id/files/:filename/download', authenticateToken, async (req, res) => {
+  try {
+    const { id, filename } = req.params;
+    
+    console.log('=== FILE DOWNLOAD REQUEST ===');
+    console.log('Inquiry ID:', id);
+    console.log('Filename:', filename);
+    console.log('User ID:', req.userId);
+    console.log('User role:', req.userRole);
+    
+    // Check if user is admin/backoffice - they can access any inquiry
+    const isAdmin = ['admin', 'backoffice', 'subadmin'].includes(req.userRole);
+    console.log('Is admin user:', isAdmin);
+    
+    let inquiry;
+    if (isAdmin) {
+      // Admin users can access any inquiry
+      inquiry = await Inquiry.findOne({
+        _id: id
+      }).populate('customer', 'firstName lastName companyName');
+    } else {
+      // Regular users can only access their own inquiries
+      inquiry = await Inquiry.findOne({
+        _id: id,
+        customer: req.userId
+      }).populate('customer', 'firstName lastName companyName');
+    }
+
+    if (!inquiry) {
+      console.log('Inquiry not found. ID:', id, 'User ID:', req.userId, 'Is Admin:', isAdmin);
+      
+      // Let's also check if the inquiry exists at all
+      const anyInquiry = await Inquiry.findOne({ _id: id });
+      if (anyInquiry) {
+        console.log('Inquiry exists but user does not have access. Inquiry customer:', anyInquiry.customer);
+      } else {
+        console.log('Inquiry does not exist in database');
+      }
+      
+      return res.status(404).json({
+        success: false,
+        message: 'Inquiry not found'
+      });
+    }
+
+    console.log('Inquiry found:', inquiry.inquiryNumber);
+    console.log('Files in inquiry:', inquiry.files.length);
+
+    // Find the file in the inquiry
+    const file = inquiry.files.find(f => f.fileName === filename || f.originalName === filename);
+    
+    if (!file) {
+      console.log('File not found in inquiry. Available files:', inquiry.files.map(f => ({ fileName: f.fileName, originalName: f.originalName })));
+      return res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
+    }
+
+    console.log('File found:', file.originalName, 'Path:', file.filePath);
+
+    // Check if file exists on disk
+    if (!fs.existsSync(file.filePath)) {
+      console.log('File does not exist on disk:', file.filePath);
+      return res.status(404).json({
+        success: false,
+        message: 'File not found on server'
+      });
+    }
+
+    console.log('File exists, starting download...');
+
+    // Set appropriate headers and send file
+    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    
+    res.download(file.filePath, file.originalName, (err) => {
+      if (err) {
+        console.error('File download error:', err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Error downloading file'
+          });
+        }
+      } else {
+        console.log('File download completed successfully');
+      }
+    });
+
+  } catch (error) {
+    console.error('File download error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
 // Upload additional files to existing inquiry
 router.post('/:id/upload', authenticateToken, upload.array('files', 10), handleMulterErrors, async (req, res) => {
   try {
@@ -1034,6 +1147,74 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Delete inquiry error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Admin route to update inquiry parts
+router.put('/admin/:id', authenticateToken, requireBackOffice, [
+  body('parts').isArray({ min: 1 }),
+  body('parts.*.material').notEmpty().trim(),
+  body('parts.*.thickness').notEmpty().trim(),
+  body('parts.*.quantity').isInt({ min: 1 })
+], async (req, res) => {
+  try {
+    console.log('=== ADMIN UPDATE INQUIRY ===');
+    console.log('Inquiry ID:', req.params.id);
+    console.log('User ID:', req.userId);
+    console.log('User role:', req.userRole);
+    console.log('Parts to update:', req.body.parts);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('Validation errors:', errors.array());
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const inquiry = await Inquiry.findOne({
+      _id: req.params.id
+    });
+
+    if (!inquiry) {
+      console.log('Inquiry not found:', req.params.id);
+      return res.status(404).json({
+        success: false,
+        message: 'Inquiry not found'
+      });
+    }
+
+    console.log('Inquiry found:', inquiry.inquiryNumber);
+
+    const { parts, specialInstructions, expectedDeliveryDate } = req.body;
+
+    // Update inquiry
+    inquiry.parts = parts;
+    if (specialInstructions !== undefined) {
+      inquiry.specialInstructions = specialInstructions;
+    }
+    if (expectedDeliveryDate !== undefined) {
+      inquiry.expectedDeliveryDate = expectedDeliveryDate;
+    }
+
+    await inquiry.save();
+
+    console.log('Inquiry updated successfully');
+
+    res.json({
+      success: true,
+      message: 'Inquiry updated successfully',
+      inquiry: inquiry
+    });
+
+  } catch (error) {
+    console.error('Admin update inquiry error:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'

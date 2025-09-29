@@ -5,7 +5,7 @@ const User = require('../models/User');
 const createAdminUser = async () => {
   try {
     // Connect to MongoDB
-    await mongoose.connect('mongodb://localhost:27017/komacut');
+    await mongoose.connect('mongodb+srv://damsole:Damsole@cluster0.mwqeffk.mongodb.net/komacut?retryWrites=true&w=majority');
     console.log('Connected to MongoDB');
 
     // Check if admin user already exists
@@ -26,7 +26,7 @@ const createAdminUser = async () => {
       password: hashedPassword,
       phoneNumber: '9876543210',
       companyName: '247 Cutbend',
-      department: 'Administration',
+      department: 'Other',
       country: 'India',
       role: 'admin',
       isActive: true
