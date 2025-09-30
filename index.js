@@ -60,7 +60,13 @@ app.use(helmet({
 
 // CORS configuration for production
 const corsOptions = {
-  origin: true, // Allow all origins for now
+  origin: [
+    'http://localhost:3000', // Development
+    'https://komacut-frontend.onrender.com', // Production frontend
+    'https://comcat-frontend.onrender.com', // Alternative frontend URL
+    'https://netlify.app', // Netlify deployments
+    'https://*.netlify.app' // All Netlify subdomains
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
