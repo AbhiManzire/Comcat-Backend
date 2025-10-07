@@ -30,9 +30,9 @@ const authenticateToken = (req, res, next) => {
       });
     }
     
-    console.log('Token verified successfully:', { userId: decoded.id || decoded.userId, role: decoded.type || decoded.role });
-    req.userId = decoded.id || decoded.userId;
-    req.userRole = decoded.type || decoded.role;
+    console.log('Token verified successfully:', { userId: decoded.userId, role: decoded.role });
+    req.userId = decoded.userId;
+    req.userRole = decoded.role;
     next();
   });
 };

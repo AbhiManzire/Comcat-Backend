@@ -1,5 +1,4 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const Order = require('../models/Order');
 const Notification = require('../models/Notification');
@@ -7,28 +6,8 @@ const { sendOrderConfirmation } = require('../services/emailService');
 
 const router = express.Router();
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// Middleware to verify JWT token
-const authenticateToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ message: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ message: 'Invalid token' });
-    }
-    req.userId = decoded.id || decoded.userId;
-    req.userRole = decoded.type || decoded.role;
-    next();
-  });
-};
-
 // Import middleware from auth.js
-const { requireBackOffice } = require('../middleware/auth');
+const { authenticateToken, requireBackOffice } = require('../middleware/auth');
 
 // Get customer orders (Customer access)
 router.get('/customer', authenticateToken, async (req, res) => {
@@ -87,7 +66,7 @@ router.get('/', authenticateToken, requireBackOffice, async (req, res) => {
 // Create order from quotation
 router.post('/', authenticateToken, [
   body('quotationId').notEmpty().withMessage('Quotation ID is required'),
-  body('paymentMethod').isIn(['online', 'cod']).withMessage('Valid payment method is required'),
+  body('paymentMethod').isIn(['online', 'cod', 'direct']).withMessage('Valid payment method is required'),
   body('totalAmount').isFloat({ min: 0 }).withMessage('Valid total amount is required')
 ], async (req, res) => {
   try {
@@ -104,15 +83,7 @@ router.post('/', authenticateToken, [
 
     // Check if quotation exists and is accepted
     const Quotation = require('../models/Quotation');
-    const quotation = await Quotation.findById(quotationId)
-      .populate('inquiry', 'inquiryNumber customer deliveryAddress specialInstructions')
-      .populate({
-        path: 'inquiry',
-        populate: {
-          path: 'customer',
-          select: 'firstName lastName email companyName phoneNumber'
-        }
-      });
+    const quotation = await Quotation.findById(quotationId);
 
     if (!quotation) {
       return res.status(404).json({
@@ -128,36 +99,135 @@ router.post('/', authenticateToken, [
       });
     }
 
+    // Get inquiry data separately since quotation.inquiryId is a string
+    const Inquiry = require('../models/Inquiry');
+    const inquiry = await Inquiry.findById(quotation.inquiryId)
+      .populate('customer', 'firstName lastName email companyName phoneNumber');
+
+    if (!inquiry) {
+      return res.status(404).json({
+        success: false,
+        message: 'Associated inquiry not found'
+      });
+    }
+
     // Create order
     const order = new Order({
       quotation: quotationId,
-      inquiry: quotation.inquiry._id,
+      inquiry: inquiry._id,
       customer: req.userId,
-      parts: parts || quotation.parts,
+      parts: parts || quotation.items,
       totalAmount: totalAmount || quotation.totalAmount,
       payment: {
-        method: paymentMethod === 'online' ? 'credit_card' : 'pending',
+        method: paymentMethod === 'online' ? 'credit_card' : paymentMethod === 'direct' ? 'direct' : 'pending',
         status: paymentMethod === 'online' ? 'pending' : 'completed',
         amount: totalAmount || quotation.totalAmount
       },
       status: paymentMethod === 'online' ? 'pending' : 'confirmed',
-      deliveryAddress: deliveryAddress || quotation.inquiry.deliveryAddress,
-      specialInstructions: quotation.inquiry.specialInstructions
+      deliveryAddress: deliveryAddress || inquiry.deliveryAddress,
+      specialInstructions: inquiry.specialInstructions
     });
 
     await order.save();
 
+    // Populate customer data for email
+    await order.populate('customer', 'firstName lastName email companyName phoneNumber');
+
     // Update quotation status
     quotation.status = 'order_created';
     quotation.order = order._id;
+    quotation.orderCreatedAt = new Date();
     await quotation.save();
 
-    // Send order confirmation email
+    // Send payment confirmation email to admin (as per requirement)
+    try {
+      const { sendPaymentConfirmation } = require('../services/emailService');
+      await sendPaymentConfirmation(order);
+      console.log('Payment confirmation email sent to admin for order:', order.orderNumber);
+    } catch (emailError) {
+      console.error('Payment confirmation email failed:', emailError);
+      // Don't fail the operation if email fails
+    }
+
+    // Send order confirmation email to customer
     try {
       await sendOrderConfirmation(order);
     } catch (emailError) {
       console.error('Order confirmation email failed:', emailError);
       // Don't fail the operation if email fails
+    }
+
+    // Create notification for customer about order confirmation
+    try {
+      const Notification = require('../models/Notification');
+      await Notification.createNotification({
+        title: 'Order Confirmed',
+        message: `Your order ${order.orderNumber} has been confirmed and is now in production. ${paymentMethod === 'cod' ? 'Payment will be collected on delivery.' : 'Payment completed successfully.'} We will keep you updated on the progress.`,
+        type: 'success',
+        userId: order.customer,
+        relatedEntity: {
+          type: 'order',
+          entityId: order._id
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          totalAmount: order.totalAmount,
+          paymentMethod: paymentMethod,
+          status: order.status,
+          confirmedAt: new Date()
+        }
+      });
+      console.log('Customer notification created for order confirmation');
+    } catch (notificationError) {
+      console.error('Failed to create customer order confirmation notification:', notificationError);
+    }
+
+    // Create notification for all admin users about payment received
+    try {
+      const User = require('../models/User');
+      const Notification = require('../models/Notification');
+      const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
+      
+      for (const admin of adminUsers) {
+        await Notification.createNotification({
+          title: 'Payment Received',
+          message: `Payment of $${order.totalAmount} received for order ${order.orderNumber}. Customer: ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}. Payment method: ${paymentMethod}`,
+          type: 'success',
+          userId: admin._id,
+          relatedEntity: {
+            type: 'order',
+            entityId: order._id
+          },
+          metadata: {
+            orderNumber: order.orderNumber,
+            paymentAmount: order.totalAmount,
+            paymentMethod: paymentMethod,
+            customerName: `${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}`,
+            paidAt: new Date()
+          }
+        });
+      }
+      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
+    } catch (notificationError) {
+      console.error('Failed to create admin payment notifications:', notificationError);
+    }
+
+    // Send real-time WebSocket notification to customer
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyOrderCreated(order);
+      console.log('Real-time order notification sent to customer');
+    } catch (wsError) {
+      console.error('WebSocket order notification failed:', wsError);
+    }
+
+    // Send real-time WebSocket notification to admin users
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyPaymentReceived(order, order.totalAmount, `dummy_${order._id}`);
+      console.log('Real-time payment notification sent to admin users');
+    } catch (wsError) {
+      console.error('WebSocket admin payment notification failed:', wsError);
     }
 
     res.status(201).json({

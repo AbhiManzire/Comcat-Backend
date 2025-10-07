@@ -7,15 +7,27 @@ const { body, validationResult } = require('express-validator');
 const Inquiry = require('../models/Inquiry');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const Quotation = require('../models/Quotation');
 const { sendInquiryNotification } = require('../services/emailService');
 const { processExcelFile } = require('../services/excelService');
 const mongoose = require('mongoose');
 const { requireBackOffice } = require('../middleware/auth');
+const websocketService = require('../services/websocketService');
 
 const router = express.Router();
 
 // Import authentication middleware
 const { authenticateToken } = require('../middleware/auth');
+
+
+// Health check endpoint
+router.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Inquiry API is healthy',
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -367,20 +379,28 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
 
     console.log('Files processed:', files.length);
 
-    // Process Excel files to extract component data
+    // Process Excel files to extract component data (optimized)
     let excelComponents = [];
     const excelFiles = files.filter(file => ['.xlsx', '.xls'].includes(file.fileType));
     
-    for (const excelFile of excelFiles) {
-      try {
-        const excelResult = await processExcelFile(excelFile.filePath);
-        if (excelResult.success && excelResult.components.length > 0) {
-          excelComponents = [...excelComponents, ...excelResult.components];
-          console.log(`Excel file processed: ${excelFile.originalName}, extracted ${excelResult.components.length} components`);
+    // Process Excel files in parallel for better performance
+    if (excelFiles.length > 0) {
+      const excelPromises = excelFiles.map(async (excelFile) => {
+        try {
+          const excelResult = await processExcelFile(excelFile.filePath);
+          if (excelResult.success && excelResult.components.length > 0) {
+            console.log(`Excel file processed: ${excelFile.originalName}, extracted ${excelResult.components.length} components`);
+            return excelResult.components;
+          }
+          return [];
+        } catch (error) {
+          console.error(`Error processing Excel file ${excelFile.originalname}:`, error);
+          return [];
         }
-      } catch (error) {
-        console.error(`Error processing Excel file ${excelFile.originalname}:`, error);
-      }
+      });
+      
+      const excelResults = await Promise.all(excelPromises);
+      excelComponents = excelResults.flat();
     }
 
     // Process parts data - handle both string and object formats
@@ -522,45 +542,7 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       customerPhone: inquiry.customer.phoneNumber
     });
 
-    // Send notification to back office (with error handling)
-    try {
-      await sendInquiryNotification(inquiry);
-      console.log('Inquiry notification sent successfully to back office');
-    } catch (emailError) {
-      console.error('Inquiry notification failed:', emailError);
-      // Don't fail the inquiry creation if email fails
-    }
-
-    // Create notification for all back office users
-    try {
-      const backOfficeUsers = await User.find({ role: { $in: ['admin', 'backoffice'] } });
-      
-      for (const user of backOfficeUsers) {
-        await Notification.createNotification({
-          title: 'New Inquiry Received',
-          message: `Inquiry ${inquiry.inquiryNumber} received from ${inquiry.customer.firstName} ${inquiry.customer.lastName}. ${inquiry.parts.length} parts, ${inquiry.files.length} files. Please review.`,
-          type: 'info',
-          userId: user._id,
-          relatedEntity: {
-            type: 'inquiry',
-            entityId: inquiry._id
-          },
-          metadata: {
-            inquiryNumber: inquiry.inquiryNumber,
-            customerName: `${inquiry.customer.firstName} ${inquiry.customer.lastName}`,
-            customerEmail: inquiry.customer.email,
-            partsCount: inquiry.parts.length,
-            filesCount: inquiry.files.length
-          }
-        });
-      }
-      
-      console.log(`Created notifications for ${backOfficeUsers.length} back office users`);
-    } catch (notificationError) {
-      console.error('Failed to create notifications:', notificationError);
-      // Don't fail the inquiry creation if notification creation fails
-    }
-
+    // Send response immediately to user
     res.status(201).json({
       success: true,
       message: 'Inquiry created successfully',
@@ -569,6 +551,55 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
         inquiryNumber: inquiry.inquiryNumber,
         status: inquiry.status,
         totalAmount: inquiry.totalAmount
+      }
+    });
+
+    // Send notifications asynchronously (don't block response)
+    setImmediate(async () => {
+      try {
+        // Send email notification to back office
+        await sendInquiryNotification(inquiry);
+        console.log('Inquiry notification sent successfully to back office');
+      } catch (emailError) {
+        console.error('Inquiry notification failed:', emailError);
+      }
+
+      // Create notification for all back office users
+      try {
+        const backOfficeUsers = await User.find({ role: { $in: ['admin', 'backoffice'] } });
+        
+        for (const user of backOfficeUsers) {
+          await Notification.createNotification({
+            title: 'New Inquiry Received',
+            message: `Inquiry ${inquiry.inquiryNumber} received from ${inquiry.customer.firstName} ${inquiry.customer.lastName}. ${inquiry.parts.length} parts, ${inquiry.files.length} files. Please review.`,
+            type: 'info',
+            userId: user._id,
+            relatedEntity: {
+              type: 'inquiry',
+              entityId: inquiry._id
+            },
+            metadata: {
+              inquiryNumber: inquiry.inquiryNumber,
+              customerName: `${inquiry.customer.firstName} ${inquiry.customer.lastName}`,
+              customerEmail: inquiry.customer.email,
+              partsCount: inquiry.parts.length,
+              filesCount: inquiry.files.length
+            }
+          });
+        }
+        
+        console.log(`Created notifications for ${backOfficeUsers.length} back office users`);
+        
+        // Send real-time WebSocket notification
+        try {
+          websocketService.notifyNewInquiry(inquiry);
+          console.log('Real-time notification sent via WebSocket');
+        } catch (wsError) {
+          console.error('WebSocket notification failed:', wsError);
+        }
+        
+      } catch (notificationError) {
+        console.error('Failed to create notifications:', notificationError);
       }
     });
 
@@ -663,10 +694,10 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
     console.log('=== ADMIN INQUIRY REQUEST ===');
     console.log('Inquiry ID:', id);
     console.log('User ID:', req.userId);
-    console.log('User role:', req.user?.role);
+    console.log('User role:', req.userRole);
     
     // Check if ID is valid
-    if (!id || id === 'undefined' || id === 'null') {
+    if (!id || id === 'undefined' || id === 'null' || id.trim() === '') {
       console.log('Invalid ID provided:', id);
       return res.status(400).json({
         success: false,
@@ -687,26 +718,14 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
         _id: id
       })
       .populate('customer', 'firstName lastName companyName email phoneNumber')
-      .populate({
-        path: 'quotation',
-        populate: {
-          path: 'inquiry',
-          select: 'inquiryNumber customer'
-        }
-      });
+      .populate('quotation', 'quotationNumber status totalAmount validUntil');
     } else {
       // Search by inquiry number
       inquiry = await Inquiry.findOne({
         inquiryNumber: id
       })
       .populate('customer', 'firstName lastName companyName email phoneNumber')
-      .populate({
-        path: 'quotation',
-        populate: {
-          path: 'inquiry',
-          select: 'inquiryNumber customer'
-        }
-      });
+      .populate('quotation', 'quotationNumber status totalAmount validUntil');
     }
 
     if (!inquiry) {
@@ -812,8 +831,14 @@ router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     
+    console.log('=== REGULAR INQUIRY REQUEST ===');
+    console.log('Inquiry ID:', id);
+    console.log('User ID:', req.userId);
+    console.log('User role:', req.userRole);
+    
     // Check if ID is valid
-    if (!id || id === 'undefined' || id === 'null') {
+    if (!id || id === 'undefined' || id === 'null' || id.trim() === '') {
+      console.log('Invalid ID provided:', id);
       return res.status(400).json({
         success: false,
         message: 'Invalid inquiry ID provided',
@@ -834,13 +859,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         customer: req.userId
       })
       .populate('customer', 'firstName lastName companyName')
-      .populate({
-        path: 'quotation',
-        populate: {
-          path: 'inquiry',
-          select: 'inquiryNumber customer'
-        }
-      });
+      .populate('quotation', 'quotationNumber status totalAmount validUntil');
     } else {
       // Search by inquiry number
       inquiry = await Inquiry.findOne({
@@ -848,13 +867,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         customer: req.userId
       })
       .populate('customer', 'firstName lastName companyName')
-      .populate({
-        path: 'quotation',
-        populate: {
-          path: 'inquiry',
-          select: 'inquiryNumber customer'
-        }
-      });
+      .populate('quotation', 'quotationNumber status totalAmount validUntil');
     }
 
     if (!inquiry) {

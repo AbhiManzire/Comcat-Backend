@@ -228,6 +228,48 @@ router.put('/orders/:id/delivery', authenticateToken, requireBackOffice, [
   }
 });
 
+// Test SMS service (Admin only)
+router.post('/test-sms', authenticateToken, requireAdmin, [
+  body('phoneNumber').notEmpty().withMessage('Phone number is required'),
+  body('message').notEmpty().withMessage('Message is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { phoneNumber, message } = req.body;
+    const { sendSMS, isTwilioConfigured } = require('../services/smsService');
+
+    if (!isTwilioConfigured) {
+      return res.status(400).json({
+        success: false,
+        message: 'SMS service not configured. Please check Twilio credentials.'
+      });
+    }
+
+    const result = await sendSMS(phoneNumber, message);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'SMS sent successfully' : 'Failed to send SMS',
+      result: result
+    });
+
+  } catch (error) {
+    console.error('Test SMS error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
 // Get all users (Admin only)
 router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
   try {

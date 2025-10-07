@@ -1,74 +1,81 @@
 const mongoose = require('mongoose');
 
 const quotationSchema = new mongoose.Schema({
-  inquiry: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Inquiry',
-    required: true
-  },
   quotationNumber: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+  inquiryId: {
     type: String,
     required: true,
     unique: true
   },
-  status: {
-    type: String,
-    enum: ['draft', 'sent', 'accepted', 'rejected', 'expired', 'order_created'],
-    default: 'draft'
-  },
-  parts: [{
-    partRef: String,
-    material: String,
-    thickness: String,
-    quantity: Number,
-    remarks: String,
-    unitPrice: {
-      type: Number,
+  customerInfo: {
+    name: {
+      type: String,
       required: true
     },
-    totalPrice: {
-      type: Number,
+    company: {
+      type: String,
       required: true
     },
-    created: {
-      type: Date,
-      default: Date.now
+    email: {
+      type: String,
+      required: true
     },
-    modified: {
-      type: Date,
-      default: Date.now
+    phone: {
+      type: String,
+      required: true
     }
-  }],
+  },
   totalAmount: {
     type: Number,
     required: true
   },
-  currency: {
+  items: [{
+    partRef: String,
+    material: String,
+    thickness: String,
+    grade: String,
+    quantity: Number,
+    unitPrice: Number,
+    totalPrice: Number,
+    remark: String
+  }],
+  quotationPdf: {
     type: String,
-    default: 'USD'
+    required: false
   },
-  validUntil: {
-    type: Date,
-    required: true
-  },
-  terms: {
+  status: {
     type: String,
-    default: 'Standard manufacturing terms apply. Payment required before production begins.'
+    enum: ['draft', 'created', 'uploaded', 'sent', 'accepted', 'rejected', 'order_created'],
+    default: 'draft'
   },
-  notes: String,
-  isUploadQuotation: {
-    type: Boolean,
-    default: false
+  sentAt: {
+    type: Date
   },
-  preparedBy: {
+  acceptedAt: {
+    type: Date
+  },
+  rejectedAt: {
+    type: Date
+  },
+  rejectionReason: {
+    type: String
+  },
+  order: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order'
+  },
+  orderCreatedAt: {
+    type: Date
+  },
+  createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  sentAt: Date,
-  acceptedAt: Date,
-  rejectedAt: Date,
-  orderCreatedAt: Date,
   createdAt: {
     type: Date,
     default: Date.now
@@ -82,30 +89,23 @@ const quotationSchema = new mongoose.Schema({
 });
 
 // Generate quotation number
-quotationSchema.pre('validate', function(next) {
+quotationSchema.pre('save', function(next) {
   if (this.isNew && !this.quotationNumber) {
     const date = new Date();
     const year = date.getFullYear().toString().slice(-2);
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const day = date.getDate().toString().padStart(2, '0');
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    this.quotationNumber = `QT${year}${month}${day}${random}`;
+    this.quotationNumber = `QUO${year}${month}${day}${random}`;
   }
   next();
 });
 
-// Calculate total amount
-quotationSchema.methods.calculateTotal = function() {
-  this.totalAmount = this.parts.reduce((total, part) => total + part.totalPrice, 0);
-  return this.totalAmount;
-};
-
-// Set default validity (30 days from creation)
-quotationSchema.pre('save', function(next) {
-  if (this.isNew && !this.validUntil) {
-    this.validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
-  }
-  next();
-});
+// Index for better query performance
+quotationSchema.index({ inquiryId: 1 });
+quotationSchema.index({ quotationNumber: 1 });
+quotationSchema.index({ 'customerInfo.email': 1 });
+quotationSchema.index({ status: 1 });
+quotationSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('Quotation', quotationSchema);

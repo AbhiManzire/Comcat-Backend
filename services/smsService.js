@@ -1,8 +1,16 @@
 const twilio = require('twilio');
+const axios = require('axios');
 
 // Initialize Twilio client
 let twilioClient = null;
 let isTwilioConfigured = false;
+
+// Alternative SMS providers for better reliability
+const SMS_PROVIDERS = {
+  TWILIO: 'twilio',
+  TEXTLOCAL: 'textlocal',
+  FAST2SMS: 'fast2sms'
+};
 
 const initializeTwilio = () => {
   try {
@@ -22,34 +30,113 @@ const initializeTwilio = () => {
   }
 };
 
-// Send SMS using Twilio
-const sendSMS = async (phoneNumber, message) => {
+// Send SMS using TextLocal (backup provider)
+const sendSMSTextLocal = async (phoneNumber, message) => {
   try {
-    if (!isTwilioConfigured || !twilioClient) {
-      console.log(`SMS to ${phoneNumber}: ${message} (Twilio not configured)`);
-      return { success: false, message: 'SMS service not configured' };
+    if (!process.env.TEXTLOCAL_API_KEY) {
+      return { success: false, message: 'TextLocal API key not configured' };
     }
 
-    // Format phone number (add + if not present)
-    let formattedNumber = phoneNumber;
-    if (!phoneNumber.startsWith('+')) {
-      formattedNumber = `+${phoneNumber}`;
-    }
-
-    // Send SMS
-    const result = await twilioClient.messages.create({
-      body: message,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: formattedNumber
+    const response = await axios.post('https://api.textlocal.in/send/', {
+      apikey: process.env.TEXTLOCAL_API_KEY,
+      numbers: phoneNumber,
+      message: message,
+      sender: process.env.TEXTLOCAL_SENDER || 'KOMACUT'
     });
 
-    console.log(`SMS sent successfully to ${phoneNumber}. SID: ${result.sid}`);
-    return { 
-      success: true, 
-      messageId: result.sid,
-      status: result.status,
-      to: result.to
-    };
+    if (response.data.status === 'success') {
+      console.log(`SMS sent via TextLocal to ${phoneNumber}. Batch ID: ${response.data.batch_id}`);
+      return { 
+        success: true, 
+        messageId: response.data.batch_id,
+        provider: 'textlocal'
+      };
+    } else {
+      return { success: false, error: response.data.errors[0].message };
+    }
+
+  } catch (error) {
+    console.error('TextLocal SMS failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Send SMS using Fast2SMS (backup provider)
+const sendSMSFast2SMS = async (phoneNumber, message) => {
+  try {
+    if (!process.env.FAST2SMS_API_KEY) {
+      return { success: false, message: 'Fast2SMS API key not configured' };
+    }
+
+    const response = await axios.get('https://www.fast2sms.com/dev/bulkV2', {
+      params: {
+        authorization: process.env.FAST2SMS_API_KEY,
+        message: message,
+        language: 'english',
+        route: 'v3',
+        numbers: phoneNumber
+      }
+    });
+
+    if (response.data.return === true) {
+      console.log(`SMS sent via Fast2SMS to ${phoneNumber}. Request ID: ${response.data.request_id}`);
+      return { 
+        success: true, 
+        messageId: response.data.request_id,
+        provider: 'fast2sms'
+      };
+    } else {
+      return { success: false, error: response.data.message };
+    }
+
+  } catch (error) {
+    console.error('Fast2SMS failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Send SMS with fallback providers
+const sendSMS = async (phoneNumber, message) => {
+  try {
+    // Try Twilio first (primary)
+    if (isTwilioConfigured && twilioClient) {
+      // Format phone number (add + if not present)
+      let formattedNumber = phoneNumber;
+      if (!phoneNumber.startsWith('+')) {
+        formattedNumber = `+${phoneNumber}`;
+      }
+
+      const result = await twilioClient.messages.create({
+        body: message,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: formattedNumber
+      });
+
+      console.log(`SMS sent successfully via Twilio to ${phoneNumber}. SID: ${result.sid}`);
+      return { 
+        success: true, 
+        messageId: result.sid,
+        status: result.status,
+        to: result.to,
+        provider: 'twilio'
+      };
+    }
+
+    // Fallback to TextLocal
+    const textLocalResult = await sendSMSTextLocal(phoneNumber, message);
+    if (textLocalResult.success) {
+      return textLocalResult;
+    }
+
+    // Fallback to Fast2SMS
+    const fast2smsResult = await sendSMSFast2SMS(phoneNumber, message);
+    if (fast2smsResult.success) {
+      return fast2smsResult;
+    }
+
+    // All providers failed
+    console.log(`SMS to ${phoneNumber}: ${message} (All SMS providers failed)`);
+    return { success: false, message: 'All SMS services unavailable' };
 
   } catch (error) {
     console.error('SMS sending failed:', error);

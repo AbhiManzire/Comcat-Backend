@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const fs = require('fs');
 
 // Create transporter
 const createTransporter = () => {
@@ -162,47 +163,167 @@ const sendInquiryNotification = async (inquiry) => {
       }
     }
     
+    // Prepare attachments for important files (PDF, DWG, DXF)
+    const attachments = [];
+    if (inquiry.files && inquiry.files.length > 0) {
+      // Filter important files that back office needs to review
+      const importantFiles = inquiry.files.filter(file => {
+        const fileName = file.originalName.toLowerCase();
+        const fileType = file.fileType ? file.fileType.toLowerCase() : '';
+        return fileName.endsWith('.pdf') || 
+               fileName.endsWith('.dwg') || 
+               fileName.endsWith('.dxf') ||
+               fileType === 'application/pdf' ||
+               fileType === 'application/dwg' ||
+               fileType === 'application/dxf';
+      });
+      
+      for (const file of importantFiles) {
+        try {
+          // Check if file exists
+          if (fs.existsSync(file.filePath)) {
+            // Determine content type based on file extension
+            let contentType = 'application/octet-stream';
+            const fileName = file.originalName.toLowerCase();
+            
+            if (fileName.endsWith('.pdf')) {
+              contentType = 'application/pdf';
+            } else if (fileName.endsWith('.dwg')) {
+              contentType = 'application/dwg';
+            } else if (fileName.endsWith('.dxf')) {
+              contentType = 'application/dxf';
+            }
+            
+            attachments.push({
+              filename: file.originalName,
+              path: file.filePath,
+              contentType: contentType
+            });
+            console.log(`Added attachment: ${file.originalName} (${contentType})`);
+          } else {
+            console.warn(`File not found: ${file.filePath}`);
+          }
+        } catch (error) {
+          console.error(`Error adding attachment ${file.originalName}:`, error);
+        }
+      }
+    }
+
     const mailOptions = {
       from: process.env.SMTP_FROM || 'noreply@komacut.com',
       to: process.env.BACKOFFICE_EMAIL || 'backoffice@komacut.com',
       subject: `New Inquiry Received - ${inquiry.inquiryNumber}`,
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background-color: #FF9800; color: white; padding: 20px; text-align: center;">
-            <h1 style="margin: 0;">New Inquiry Received</h1>
-            <p style="margin: 5px 0;">Inquiry Number: ${inquiry.inquiryNumber}</p>
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; background-color: #f8f9fa;">
+          <!-- Header with Company Branding -->
+          <div style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; padding: 30px 20px; text-align: center; border-radius: 8px 8px 0 0;">
+            <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+              <div style="width: 50px; height: 50px; background-color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;">
+                <span style="color: #FF9800; font-size: 24px; font-weight: bold;">K</span>
+              </div>
+              <div>
+                <h1 style="margin: 0; font-size: 28px; font-weight: 700;">KOMACUT</h1>
+                <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">SHEET METAL PARTS ON DEMAND</p>
+              </div>
+            </div>
+            <h2 style="margin: 0; font-size: 24px; font-weight: 600;">New Inquiry Received</h2>
+            <p style="margin: 10px 0 0 0; font-size: 16px; opacity: 0.9;">Inquiry Number: <strong>${inquiry.inquiryNumber}</strong></p>
           </div>
           
-          <div style="padding: 20px;">
-            <h3>Customer Information:</h3>
-            <p><strong>Name:</strong> ${customerInfo.firstName} ${customerInfo.lastName}</p>
-            <p><strong>Company:</strong> ${customerInfo.companyName}</p>
-            <p><strong>Email:</strong> ${customerInfo.email}</p>
-            <p><strong>Phone:</strong> ${customerInfo.phoneNumber}</p>
+          <!-- Main Content -->
+          <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
             
-            <h3>Inquiry Details:</h3>
-            <p><strong>Files Attached:</strong> ${inquiry.files.length}</p>
-            <p><strong>Parts:</strong> ${inquiry.parts.length}</p>
-            <p><strong>Total Amount:</strong> $${inquiry.totalAmount || 0}</p>
+            <!-- Customer Information Card -->
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #FF9800;">
+              <h3 style="margin: 0 0 15px 0; color: #333; font-size: 18px; font-weight: 600;">👤 Customer Information</h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <p style="margin: 5px 0; color: #555;"><strong>Name:</strong> ${customerInfo.firstName} ${customerInfo.lastName}</p>
+                <p style="margin: 5px 0; color: #555;"><strong>Company:</strong> ${customerInfo.companyName}</p>
+                <p style="margin: 5px 0; color: #555;"><strong>Email:</strong> ${customerInfo.email}</p>
+                <p style="margin: 5px 0; color: #555;"><strong>Phone:</strong> ${customerInfo.phoneNumber}</p>
+              </div>
+            </div>
             
-            <h3>Parts Specifications:</h3>
-            <ul>
-              ${inquiry.parts.map(part => `
-                <li>${part.partRef || 'Part'}: ${part.material} - ${part.thickness}mm (Qty: ${part.quantity})
-                  ${part.remarks ? `<br><em>Remarks: ${part.remarks}</em>` : ''}
-                </li>
-              `).join('')}
-            </ul>
+            <!-- Inquiry Details Card -->
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #4CAF50;">
+              <h3 style="margin: 0 0 15px 0; color: #333; font-size: 18px; font-weight: 600;">📋 Inquiry Details</h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; text-align: center;">
+                <div style="background-color: white; padding: 15px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <div style="font-size: 24px; font-weight: bold; color: #FF9800;">${inquiry.files.length}</div>
+                  <div style="font-size: 12px; color: #666; text-transform: uppercase;">Files Attached</div>
+                </div>
+                <div style="background-color: white; padding: 15px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <div style="font-size: 24px; font-weight: bold; color: #4CAF50;">${inquiry.parts.length}</div>
+                  <div style="font-size: 12px; color: #666; text-transform: uppercase;">Parts</div>
+                </div>
+                <div style="background-color: white; padding: 15px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                  <div style="font-size: 24px; font-weight: bold; color: #2196F3;">$${inquiry.totalAmount || 0}</div>
+                  <div style="font-size: 12px; color: #666; text-transform: uppercase;">Total Amount</div>
+                </div>
+              </div>
+            </div>
             
+            <!-- Parts Specifications -->
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #2196F3;">
+              <h3 style="margin: 0 0 15px 0; color: #333; font-size: 18px; font-weight: 600;">🔧 Parts Specifications</h3>
+              <div style="background-color: white; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <table style="width: 100%; border-collapse: collapse;">
+                  <thead>
+                    <tr style="background-color: #f5f5f5;">
+                      <th style="padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd;">Part Ref</th>
+                      <th style="padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd;">Material</th>
+                      <th style="padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd;">Thickness</th>
+                      <th style="padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd;">Qty</th>
+                      <th style="padding: 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd;">Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${inquiry.parts.map(part => `
+                      <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 12px; color: #555;">${part.partRef || 'Part'}</td>
+                        <td style="padding: 12px; color: #555;">${part.material}</td>
+                        <td style="padding: 12px; color: #555;">${part.thickness}mm</td>
+                        <td style="padding: 12px; color: #555;">${part.quantity}</td>
+                        <td style="padding: 12px; color: #555;">${part.remarks || '-'}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            ${attachments.length > 0 ? `
+            <!-- Attached Files -->
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #9C27B0;">
+              <h3 style="margin: 0 0 15px 0; color: #333; font-size: 18px; font-weight: 600;">📎 Attached Files</h3>
+              <div style="background-color: white; padding: 15px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                ${attachments.map(attachment => `
+                  <div style="display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee;">
+                    <span style="margin-right: 10px; color: #9C27B0;">📄</span>
+                    <span style="color: #555; font-weight: 500;">${attachment.filename}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+            
+            <!-- Action Button -->
             <div style="text-align: center; margin-top: 30px;">
               <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/backoffice" 
-                 style="background-color: #FF9800; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                Review Inquiry
+                 style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 15px rgba(255, 152, 0, 0.3); display: inline-block;">
+                🔍 Review Inquiry
               </a>
             </div>
           </div>
+          
+          <!-- Footer -->
+          <div style="background-color: #333; color: white; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px;">
+            <p style="margin: 0 0 5px 0;">© 2024 Komacut. All rights reserved.</p>
+            <p style="margin: 0; opacity: 0.8;">Delivering Factory Direct Quality Sheet Metal Parts Since 2005</p>
+          </div>
         </div>
-      `
+      `,
+      attachments: attachments
     };
 
     await transporter.sendMail(mailOptions);
@@ -494,11 +615,11 @@ const sendPaymentConfirmation = async (order) => {
           <div style="padding: 20px;">
             <h3>Payment Details:</h3>
             <p><strong>Order Number:</strong> ${order.orderNumber}</p>
-            <p><strong>Customer:</strong> ${order.customer.firstName} ${order.customer.lastName}</p>
-            <p><strong>Amount:</strong> ${order.currency} ${order.totalAmount}</p>
-            <p><strong>Payment Method:</strong> ${order.payment.method}</p>
-            <p><strong>Transaction ID:</strong> ${order.payment.transactionId}</p>
-            <p><strong>Paid At:</strong> ${new Date(order.payment.paidAt).toLocaleString()}</p>
+            <p><strong>Customer:</strong> ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}</p>
+            <p><strong>Amount:</strong> $${order.totalAmount}</p>
+            <p><strong>Payment Method:</strong> ${order.payment?.method || 'Online'}</p>
+            <p><strong>Transaction ID:</strong> ${order.payment?.transactionId || 'N/A'}</p>
+            <p><strong>Paid At:</strong> ${order.payment?.paidAt ? new Date(order.payment.paidAt).toLocaleString() : new Date().toLocaleString()}</p>
             
             <h3>Next Steps:</h3>
             <p>1. Update order status to "confirmed"</p>

@@ -5,25 +5,8 @@ const Notification = require('../models/Notification');
 
 const router = express.Router();
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// Middleware to verify JWT token
-const authenticateToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ message: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ message: 'Invalid token' });
-    }
-    req.userId = decoded.id || decoded.userId;
-    req.userRole = decoded.type || decoded.role;
-    next();
-  });
-};
+// Import the shared auth middleware
+const { authenticateToken } = require('../middleware/auth');
 
 // Mock notifications data (in production, this would come from a database)
 const mockNotifications = [

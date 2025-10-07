@@ -15,10 +15,10 @@ router.get('/stats', authenticateToken, async (req, res) => {
 
     // Get quotations for this customer's inquiries
     const customerInquiries = await Inquiry.find({ customer: userId }).select('_id');
-    const inquiryIds = customerInquiries.map(inquiry => inquiry._id);
+    const inquiryIds = customerInquiries.map(inquiry => inquiry._id.toString());
     
     const totalQuotations = await Quotation.countDocuments({ 
-      inquiry: { $in: inquiryIds } 
+      inquiryId: { $in: inquiryIds } 
     });
 
     // Get orders for this customer
@@ -80,12 +80,11 @@ router.get('/activity', authenticateToken, async (req, res) => {
 
     // Get recent quotations
     const customerInquiries = await Inquiry.find({ customer: userId }).select('_id');
-    const inquiryIds = customerInquiries.map(inquiry => inquiry._id);
+    const inquiryIds = customerInquiries.map(inquiry => inquiry._id.toString());
     
     const recentQuotations = await Quotation.find({ 
-      inquiry: { $in: inquiryIds } 
+      inquiryId: { $in: inquiryIds } 
     })
-    .populate('inquiry', 'inquiryNumber title')
     .sort({ createdAt: -1 })
     .limit(3);
 
@@ -94,7 +93,7 @@ router.get('/activity', authenticateToken, async (req, res) => {
         id: quotation._id,
         type: 'quotation',
         title: 'Quotation prepared',
-        description: quotation.inquiry?.title || `Quotation #${quotation.quotationNumber}`,
+        description: `Quotation #${quotation.quotationNumber}`,
         time: getTimeAgo(quotation.createdAt),
         status: quotation.status || 'sent'
       });

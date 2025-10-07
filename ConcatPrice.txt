@@ -1,0 +1,28 @@
+MATERIAL PRICING SHEET
+Company: Test Company
+Date: January 10, 2025
+
+MATERIAL PRICES (Per Piece):
+
+1. Stainless Steel 2.0mm - $25.00
+2. Stainless Steel 3.0mm - $35.00
+3. Zintec 1.5mm - $15.00
+4. Zintec 2.0mm - $20.00
+5. Mild Steel 1.5mm - $12.00
+6. Mild Steel 2.0mm - $18.00
+7. Aluminium 1.0mm - $22.00
+8. Aluminium 2.0mm - $28.00
+9. Copper 1.0mm - $45.00
+10. Brass 1.5mm - $38.00
+
+BULK DISCOUNTS:
+- 10+ pieces: 5% discount
+- 50+ pieces: 10% discount
+- 100+ pieces: 15% discount
+
+TERMS:
+- Prices valid for 30 days
+- Payment required before production
+- Standard delivery: 7-10 business days
+
+Contact: pricing@company.com

@@ -1,31 +1,20 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const Order = require('../models/Order');
 const Quotation = require('../models/Quotation'); // Added Quotation model
 const { sendPaymentConfirmation } = require('../services/emailService');
+const { 
+  createPaymentOrder, 
+  verifyPayment, 
+  getPaymentDetails, 
+  refundPayment,
+  isRazorpayConfigured 
+} = require('../services/paymentService');
 
 const router = express.Router();
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// Middleware to verify JWT token
-const authenticateToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ message: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ message: 'Invalid token' });
-    }
-    req.userId = decoded.id || decoded.userId;
-    req.userRole = decoded.type || decoded.role;
-    next();
-  });
-};
+// Import middleware from auth.js
+const { authenticateToken } = require('../middleware/auth');
 
 // Get payment methods available
 router.get('/methods', authenticateToken, async (req, res) => {
@@ -466,7 +455,7 @@ router.get('/:orderId/history', authenticateToken, async (req, res) => {
 });
 
 // Update order after successful payment
-router.post('/create-order', authenticateToken, async (req, res) => {
+router.post('/update-order', authenticateToken, async (req, res) => {
   try {
     const { quotationId, paymentMethod, transactionId, paymentAmount } = req.body;
 
@@ -561,6 +550,70 @@ router.post('/create-order', authenticateToken, async (req, res) => {
       // Don't fail the operation if email fails
     }
 
+    // Create notification for customer about order confirmation
+    try {
+      const Notification = require('../models/Notification');
+      await Notification.createNotification({
+        title: 'Order Confirmed',
+        message: `Your order ${existingOrder.orderNumber} has been confirmed and is now in production. We will keep you updated on the progress.`,
+        type: 'success',
+        userId: existingOrder.customer,
+        relatedEntity: {
+          type: 'order',
+          entityId: existingOrder._id
+        },
+        metadata: {
+          orderNumber: existingOrder.orderNumber,
+          totalAmount: existingOrder.totalAmount,
+          status: existingOrder.status,
+          confirmedAt: new Date()
+        }
+      });
+      console.log('Customer notification created for order confirmation');
+    } catch (notificationError) {
+      console.error('Failed to create customer order confirmation notification:', notificationError);
+    }
+
+    // Create notification for all admin users about payment completion
+    try {
+      const User = require('../models/User');
+      const Notification = require('../models/Notification');
+      const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
+      
+      for (const admin of adminUsers) {
+        await Notification.createNotification({
+          title: 'Payment Received',
+          message: `Payment of $${paymentAmount} received for order ${existingOrder.orderNumber}. Customer: ${existingOrder.customer?.firstName || 'Unknown'} ${existingOrder.customer?.lastName || ''}. Transaction ID: ${transactionId}`,
+          type: 'success',
+          userId: admin._id,
+          relatedEntity: {
+            type: 'order',
+            entityId: existingOrder._id
+          },
+          metadata: {
+            orderNumber: existingOrder.orderNumber,
+            paymentAmount: paymentAmount,
+            paymentMethod: paymentMethod,
+            transactionId: transactionId,
+            customerName: `${existingOrder.customer?.firstName || 'Unknown'} ${existingOrder.customer?.lastName || ''}`,
+            paidAt: new Date()
+          }
+        });
+      }
+      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
+    } catch (notificationError) {
+      console.error('Failed to create admin payment notifications:', notificationError);
+    }
+
+    // Send real-time WebSocket notification to admin users
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyPaymentReceived(existingOrder, paymentAmount, transactionId);
+      console.log('Real-time payment notification sent to admin users');
+    } catch (wsError) {
+      console.error('WebSocket admin payment notification failed:', wsError);
+    }
+
     res.json({
       success: true,
       message: 'Order confirmed successfully after payment',
@@ -575,6 +628,314 @@ router.post('/create-order', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Update order after payment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Create Razorpay payment order
+router.post('/create-order', authenticateToken, [
+  body('amount').isNumeric().withMessage('Amount is required'),
+  body('quotationId').notEmpty().withMessage('Quotation ID is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { amount, quotationId } = req.body;
+
+    if (!isRazorpayConfigured) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment gateway not configured'
+      });
+    }
+
+    // Create Razorpay order
+    const paymentOrder = await createPaymentOrder(amount, 'INR', `quotation_${quotationId}`);
+    
+    if (!paymentOrder.success) {
+      return res.status(400).json({
+        success: false,
+        message: paymentOrder.message || 'Failed to create payment order'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Payment order created successfully',
+      order: paymentOrder
+    });
+
+  } catch (error) {
+    console.error('Create payment order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Verify Razorpay payment
+router.post('/verify', authenticateToken, [
+  body('razorpayOrderId').notEmpty().withMessage('Order ID is required'),
+  body('razorpayPaymentId').notEmpty().withMessage('Payment ID is required'),
+  body('razorpaySignature').notEmpty().withMessage('Signature is required'),
+  body('quotationId').notEmpty().withMessage('Quotation ID is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, quotationId } = req.body;
+
+    // Verify payment signature
+    const verification = verifyPayment(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+    
+    if (!verification.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment verification failed',
+        error: verification.message
+      });
+    }
+
+    // Get payment details
+    const paymentDetails = await getPaymentDetails(razorpayPaymentId);
+    
+    if (!paymentDetails.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to fetch payment details'
+      });
+    }
+
+    // Update order with payment information
+    const order = await Order.findOne({ quotation: quotationId });
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Update order payment status
+    order.payment = {
+      method: 'razorpay',
+      status: 'completed',
+      transactionId: razorpayPaymentId,
+      amount: paymentDetails.payment.amount,
+      paidAt: new Date(),
+      gateway: 'razorpay',
+      gatewayOrderId: razorpayOrderId
+    };
+    order.status = 'confirmed';
+    order.confirmedAt = new Date();
+
+    await order.save();
+
+    // Send payment confirmation email
+    try {
+      await sendPaymentConfirmation(order);
+      console.log('Payment confirmation email sent');
+    } catch (emailError) {
+      console.error('Payment confirmation email failed:', emailError);
+    }
+
+    // Create notification for customer about order confirmation (not payment)
+    try {
+      const Notification = require('../models/Notification');
+      await Notification.createNotification({
+        title: 'Order Confirmed',
+        message: `Your order ${order.orderNumber} has been confirmed and is now in production. We will keep you updated on the progress.`,
+        type: 'success',
+        userId: order.customer,
+        relatedEntity: {
+          type: 'order',
+          entityId: order._id
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          confirmedAt: new Date()
+        }
+      });
+      console.log('Customer notification created for order confirmation');
+    } catch (notificationError) {
+      console.error('Failed to create customer order confirmation notification:', notificationError);
+    }
+
+    // Create notification for all admin users about payment completion
+    try {
+      const User = require('../models/User');
+      const Notification = require('../models/Notification');
+      const adminUsers = await User.find({ role: { $in: ['admin', 'backoffice', 'subadmin'] } });
+      
+      for (const admin of adminUsers) {
+        await Notification.createNotification({
+          title: 'Payment Received',
+          message: `Payment of $${paymentDetails.payment.amount} received for order ${order.orderNumber}. Customer: ${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}. Transaction ID: ${razorpayPaymentId}`,
+          type: 'success',
+          userId: admin._id,
+          relatedEntity: {
+            type: 'order',
+            entityId: order._id
+          },
+          metadata: {
+            orderNumber: order.orderNumber,
+            paymentAmount: paymentDetails.payment.amount,
+            paymentMethod: 'razorpay',
+            transactionId: razorpayPaymentId,
+            customerName: `${order.customer?.firstName || 'Unknown'} ${order.customer?.lastName || ''}`,
+            paidAt: new Date()
+          }
+        });
+      }
+      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
+    } catch (notificationError) {
+      console.error('Failed to create admin payment notifications:', notificationError);
+    }
+
+    // Send real-time WebSocket notification to customer
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyOrderCreated(order);
+      console.log('Real-time payment notification sent to customer');
+    } catch (wsError) {
+      console.error('WebSocket payment notification failed:', wsError);
+    }
+
+    // Send real-time WebSocket notification to admin users
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyPaymentReceived(order, paymentDetails.payment.amount, razorpayPaymentId);
+      console.log('Real-time payment notification sent to admin users');
+    } catch (wsError) {
+      console.error('WebSocket admin payment notification failed:', wsError);
+    }
+
+    res.json({
+      success: true,
+      message: 'Payment verified and order confirmed',
+      payment: {
+        id: razorpayPaymentId,
+        amount: paymentDetails.payment.amount,
+        status: paymentDetails.payment.status,
+        method: paymentDetails.payment.method
+      },
+      order: {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Get payment status
+router.get('/status/:paymentId', authenticateToken, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+
+    if (!isRazorpayConfigured) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment gateway not configured'
+      });
+    }
+
+    const paymentDetails = await getPaymentDetails(paymentId);
+    
+    if (!paymentDetails.success) {
+      return res.status(400).json({
+        success: false,
+        message: paymentDetails.message || 'Failed to fetch payment details'
+      });
+    }
+
+    res.json({
+      success: true,
+      payment: paymentDetails.payment
+    });
+
+  } catch (error) {
+    console.error('Get payment status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// Refund payment (Admin only)
+router.post('/refund', authenticateToken, [
+  body('paymentId').notEmpty().withMessage('Payment ID is required'),
+  body('amount').optional().isNumeric().withMessage('Amount must be numeric'),
+  body('reason').optional().isString().withMessage('Reason must be string')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { paymentId, amount, reason } = req.body;
+
+    if (!isRazorpayConfigured) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment gateway not configured'
+      });
+    }
+
+    const refund = await refundPayment(paymentId, amount, reason);
+    
+    if (!refund.success) {
+      return res.status(400).json({
+        success: false,
+        message: refund.message || 'Refund failed'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Refund processed successfully',
+      refund: {
+        id: refund.refundId,
+        amount: refund.amount,
+        status: refund.status,
+        paymentId: refund.paymentId
+      }
+    });
+
+  } catch (error) {
+    console.error('Refund error:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
