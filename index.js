@@ -58,11 +58,12 @@ const corsOptions = {
     'http://127.0.0.1:3001', // Alternative localhost port
     'https://komacut-frontend.onrender.com', // Production frontend
     'https://comcat-frontend.onrender.com', // Alternative frontend URL
+    'https://comcat-frontends.onrender.com', // Your actual frontend URL
     'https://netlify.app', // Netlify deployments
     'https://*.netlify.app', // All Netlify subdomains
     'https://vercel.app', // Vercel deployments
     'https://*.vercel.app', // All Vercel subdomains
-    'https://comcat-frontend.onrender.com' // Your specific Render URL
+    'https://*.onrender.com' // All Render subdomains
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
