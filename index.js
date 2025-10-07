@@ -59,7 +59,10 @@ const corsOptions = {
     'https://komacut-frontend.onrender.com', // Production frontend
     'https://comcat-frontend.onrender.com', // Alternative frontend URL
     'https://netlify.app', // Netlify deployments
-    'https://*.netlify.app' // All Netlify subdomains
+    'https://*.netlify.app', // All Netlify subdomains
+    'https://vercel.app', // Vercel deployments
+    'https://*.vercel.app', // All Vercel subdomains
+    'https://comcat-frontend.vercel.app' // Your specific Vercel URL
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
