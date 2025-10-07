@@ -62,7 +62,7 @@ const corsOptions = {
     'https://*.netlify.app', // All Netlify subdomains
     'https://vercel.app', // Vercel deployments
     'https://*.vercel.app', // All Vercel subdomains
-    'https://comcat-frontend.vercel.app' // Your specific Vercel URL
+    'https://comcat-frontend.onrender.com' // Your specific Render URL
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
