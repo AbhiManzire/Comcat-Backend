@@ -478,7 +478,17 @@ const sendQuotationEmail = async (quotation) => {
 // Send order confirmation
 const sendOrderConfirmation = async (order) => {
   try {
+    console.log('=== SENDING ORDER CONFIRMATION EMAIL ===');
+    console.log('Order:', order.orderNumber);
+    console.log('Customer:', order.customer?.email);
+    
     const transporter = createTransporter();
+    
+    // If no transporter (SMTP not configured), just log and return
+    if (!transporter) {
+      console.log('SMTP not configured. Order confirmation email skipped for:', order.customer?.email);
+      return;
+    }
     
     const mailOptions = {
       from: process.env.SMTP_FROM || 'noreply@komacut.com',
@@ -487,36 +497,70 @@ const sendOrderConfirmation = async (order) => {
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <div style="background-color: #4CAF50; color: white; padding: 20px; text-align: center;">
-            <h1 style="margin: 0;">Order Confirmed</h1>
+            <h1 style="margin: 0;">KOMACUT</h1>
+            <h2 style="margin: 10px 0;">Order Confirmed</h2>
             <p style="margin: 5px 0;">Order Number: ${order.orderNumber}</p>
           </div>
           
           <div style="padding: 20px;">
-            <h3>Dear ${order.customer.firstName},</h3>
+            <h3>Dear ${order.customer.firstName || 'Customer'},</h3>
             <p>Your order has been confirmed and is now in production!</p>
             
-            <h3>Order Details:</h3>
-            <p><strong>Order Number:</strong> ${order.orderNumber}</p>
-            <p><strong>Total Amount:</strong> ${order.currency} ${order.totalAmount}</p>
-            <p><strong>Payment Status:</strong> ${order.payment ? order.payment.status : 'Completed'}</p>
+            <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">Order Details:</h3>
+              <p><strong>Order Number:</strong> ${order.orderNumber}</p>
+              <p><strong>Total Amount:</strong> ${order.currency || 'USD'} ${order.totalAmount}</p>
+              <p><strong>Payment Status:</strong> ${order.payment ? order.payment.status : 'Completed'}</p>
+              <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleDateString()}</p>
+            </div>
             
-            <h3>Production Timeline:</h3>
-            <p><strong>Start Date:</strong> ${order.production && order.production.startDate ? new Date(order.production.startDate).toLocaleDateString() : 'TBD'}</p>
-            <p><strong>Estimated Completion:</strong> ${order.production && order.production.estimatedCompletion ? new Date(order.production.estimatedCompletion).toLocaleDateString() : 'TBD'}</p>
+            <div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">Production Timeline:</h3>
+              <p><strong>Start Date:</strong> ${order.production && order.production.startDate ? new Date(order.production.startDate).toLocaleDateString() : 'TBD'}</p>
+              <p><strong>Estimated Completion:</strong> ${order.production && order.production.estimatedCompletion ? new Date(order.production.estimatedCompletion).toLocaleDateString() : 'TBD'}</p>
+            </div>
+            
+            <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">What's Next?</h3>
+              <ul>
+                <li>Your order is now in production</li>
+                <li>We will keep you updated on the progress</li>
+                <li>You will receive notifications for each milestone</li>
+                <li>Track your order using the button below</li>
+              </ul>
+            </div>
             
             <div style="text-align: center; margin-top: 30px;">
-              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/orders/${order._id}/tracking" 
-                 style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">
-                Track Order
+              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/order/${order._id}/tracking" 
+                 style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                Track Your Order
               </a>
             </div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+              <p style="font-size: 14px; color: #666;">
+                If you have any questions, please contact our support team.<br>
+                Thank you for choosing Komacut for your sheet metal manufacturing needs.
+              </p>
+            </div>
+          </div>
+          
+          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #666;">
+            <p>© 2024 Komacut. All rights reserved.</p>
+            <p>Sheet Metal Parts on Demand</p>
           </div>
         </div>
       `
     };
 
-    await transporter.sendMail(mailOptions);
-    console.log('Order confirmation email sent successfully');
+    console.log('Sending email with options:', {
+      from: mailOptions.from,
+      to: mailOptions.to,
+      subject: mailOptions.subject
+    });
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log('Order confirmation email sent successfully:', result.messageId);
     
     // Send SMS notification
     try {
@@ -713,6 +757,169 @@ const sendDeliveryConfirmation = async (order) => {
   }
 };
 
+// Send delivery time notification to customer
+const sendDeliveryTimeNotification = async (order) => {
+  try {
+    console.log('=== SENDING DELIVERY TIME NOTIFICATION ===');
+    console.log('Order:', order.orderNumber);
+    console.log('Customer:', order.customer?.email);
+    
+    const transporter = createTransporter();
+    
+    // If no transporter (SMTP not configured), just log and return
+    if (!transporter) {
+      console.log('SMTP not configured. Delivery time notification skipped for:', order.customer?.email);
+      return;
+    }
+    
+    const mailOptions = {
+      from: process.env.SMTP_FROM || 'noreply@komacut.com',
+      to: order.customer.email,
+      subject: `Delivery Time Updated - ${order.orderNumber}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: #FF9800; color: white; padding: 20px; text-align: center;">
+            <h1 style="margin: 0;">KOMACUT</h1>
+            <h2 style="margin: 10px 0;">Delivery Time Updated</h2>
+            <p style="margin: 5px 0;">Order Number: ${order.orderNumber}</p>
+          </div>
+          
+          <div style="padding: 20px;">
+            <h3>Dear ${order.customer.firstName || 'Customer'},</h3>
+            <p>We have updated the delivery time for your order. Here are the latest details:</p>
+            
+            <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">Order Details:</h3>
+              <p><strong>Order Number:</strong> ${order.orderNumber}</p>
+              <p><strong>Total Amount:</strong> ${order.currency || 'USD'} ${order.totalAmount}</p>
+              <p><strong>Current Status:</strong> ${order.status.charAt(0).toUpperCase() + order.status.slice(1).replace('_', ' ')}</p>
+            </div>
+            
+            <div style="background-color: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">Updated Delivery Information:</h3>
+              <p><strong>Estimated Delivery:</strong> ${order.production?.estimatedCompletion ? new Date(order.production.estimatedCompletion).toLocaleDateString() : 'TBD'}</p>
+              <p><strong>Production Start Date:</strong> ${order.production?.startDate ? new Date(order.production.startDate).toLocaleDateString() : 'TBD'}</p>
+              <p><strong>Updated On:</strong> ${new Date().toLocaleDateString()}</p>
+            </div>
+            
+            <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">What's Next?</h3>
+              <ul>
+                <li>Your order is currently in production</li>
+                <li>We will keep you updated on any changes</li>
+                <li>You will receive a notification when it's ready for dispatch</li>
+                <li>Track your order using the button below</li>
+              </ul>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px;">
+              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/order/${order._id}/tracking" 
+                 style="background-color: #FF9800; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                Track Your Order
+              </a>
+            </div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+              <p style="font-size: 14px; color: #666;">
+                If you have any questions about the delivery time, please contact our support team.<br>
+                Thank you for choosing Komacut for your sheet metal manufacturing needs.
+              </p>
+            </div>
+          </div>
+          
+          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #666;">
+            <p>© 2024 Komacut. All rights reserved.</p>
+            <p>Sheet Metal Parts on Demand</p>
+          </div>
+        </div>
+      `
+    };
+
+    console.log('Sending delivery time notification with options:', {
+      from: mailOptions.from,
+      to: mailOptions.to,
+      subject: mailOptions.subject
+    });
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log('Delivery time notification sent successfully:', result.messageId);
+    
+    // Send SMS notification
+    try {
+      const { sendDeliveryTimeNotificationSMS } = require('./smsService');
+      const smsResult = await sendDeliveryTimeNotificationSMS(order, order.customer);
+      if (smsResult.success) {
+        console.log('Delivery time SMS notification sent successfully');
+      } else {
+        console.log('Delivery time SMS notification failed:', smsResult.message);
+      }
+    } catch (smsError) {
+      console.error('SMS notification failed:', smsError);
+      // Don't fail the email if SMS fails
+    }
+    
+  } catch (error) {
+    console.error('Delivery time notification failed:', error);
+    throw error;
+  }
+};
+
+// Test email service function
+const testEmailService = async (testEmail) => {
+  try {
+    console.log('=== TESTING EMAIL SERVICE ===');
+    console.log('Test email:', testEmail);
+    
+    const transporter = createTransporter();
+    
+    if (!transporter) {
+      console.log('SMTP not configured. Cannot send test email.');
+      return { success: false, message: 'SMTP not configured' };
+    }
+    
+    const mailOptions = {
+      from: process.env.SMTP_FROM || 'noreply@komacut.com',
+      to: testEmail,
+      subject: 'Komacut Email Service Test',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: #4CAF50; color: white; padding: 20px; text-align: center;">
+            <h1 style="margin: 0;">KOMACUT</h1>
+            <h2 style="margin: 10px 0;">Email Service Test</h2>
+          </div>
+          
+          <div style="padding: 20px;">
+            <h3>Email Service is Working!</h3>
+            <p>This is a test email to verify that the Komacut email service is functioning correctly.</p>
+            
+            <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <h3 style="margin-top: 0;">Test Details:</h3>
+              <p><strong>Timestamp:</strong> ${new Date().toLocaleString()}</p>
+              <p><strong>SMTP Host:</strong> ${process.env.SMTP_HOST || 'smtp.gmail.com'}</p>
+              <p><strong>From Email:</strong> ${process.env.SMTP_FROM || 'noreply@komacut.com'}</p>
+            </div>
+            
+            <p>If you received this email, the email service is working correctly!</p>
+          </div>
+          
+          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #666;">
+            <p>© 2024 Komacut. All rights reserved.</p>
+          </div>
+        </div>
+      `
+    };
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log('Test email sent successfully:', result.messageId);
+    
+    return { success: true, messageId: result.messageId };
+    
+  } catch (error) {
+    console.error('Test email failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendWelcomeEmail,
   sendInquiryNotification,
@@ -721,5 +928,7 @@ module.exports = {
   sendDispatchNotification,
   sendPaymentConfirmation,
   sendDeliveryConfirmation,
-  sendSMS
+  sendDeliveryTimeNotification,
+  sendSMS,
+  testEmailService
 };

@@ -228,6 +228,49 @@ router.put('/orders/:id/delivery', authenticateToken, requireBackOffice, [
   }
 });
 
+// Test Email service (Admin only)
+router.post('/test-email', authenticateToken, requireAdmin, [
+  body('email').isEmail().withMessage('Valid email is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+    
+    const { email } = req.body;
+    
+    const { testEmailService } = require('../services/emailService');
+    const result = await testEmailService(email);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Test email sent successfully',
+        messageId: result.messageId
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: result.message || 'Failed to send test email',
+        error: result.error
+      });
+    }
+    
+  } catch (error) {
+    console.error('Test email error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
 // Test SMS service (Admin only)
 router.post('/test-sms', authenticateToken, requireAdmin, [
   body('phoneNumber').notEmpty().withMessage('Phone number is required'),

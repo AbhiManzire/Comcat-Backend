@@ -210,18 +210,10 @@ router.post('/process', authenticateToken, [
       
       await order.save();
 
-      console.log('Payment completed successfully:', {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        amount: order.payment.amount,
-        transactionId: order.payment.transactionId,
-        customerId: order.customer
-      });
 
       // Send payment confirmation email to back office
       try {
         await sendPaymentConfirmation(order);
-        console.log('Payment confirmation email sent to back office');
       } catch (emailError) {
         console.error('Payment confirmation email failed:', emailError);
         // Don't fail the operation if email fails
@@ -231,7 +223,6 @@ router.post('/process', authenticateToken, [
       try {
         const { sendOrderConfirmation } = require('../services/emailService');
         await sendOrderConfirmation(order);
-        console.log('Order confirmation email sent to customer:', order.customer.email);
       } catch (emailError) {
         console.error('Order confirmation email failed:', emailError);
         // Don't fail the operation if email fails
@@ -518,13 +509,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
 
     await existingOrder.save();
 
-    console.log('Order confirmed after payment:', {
-      orderId: existingOrder._id,
-      orderNumber: existingOrder.orderNumber,
-      amount: paymentAmount,
-      transactionId: transactionId,
-      customerId: existingOrder.customer
-    });
 
     // Update quotation status to indicate order created
     quotation.status = 'order_created';
@@ -534,7 +518,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
     // Send payment confirmation email to back office
     try {
       await sendPaymentConfirmation(existingOrder);
-      console.log('Payment confirmation email sent to back office for order:', existingOrder.orderNumber);
     } catch (emailError) {
       console.error('Payment confirmation email failed:', emailError);
       // Don't fail the operation if email fails
@@ -544,7 +527,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
     try {
       const { sendOrderConfirmation } = require('../services/emailService');
       await sendOrderConfirmation(existingOrder);
-      console.log('Order confirmation email sent to customer for order:', existingOrder.orderNumber);
     } catch (emailError) {
       console.error('Order confirmation email failed:', emailError);
       // Don't fail the operation if email fails
@@ -569,7 +551,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
           confirmedAt: new Date()
         }
       });
-      console.log('Customer notification created for order confirmation');
     } catch (notificationError) {
       console.error('Failed to create customer order confirmation notification:', notificationError);
     }
@@ -600,7 +581,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
           }
         });
       }
-      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
     } catch (notificationError) {
       console.error('Failed to create admin payment notifications:', notificationError);
     }
@@ -609,7 +589,6 @@ router.post('/update-order', authenticateToken, async (req, res) => {
     try {
       const websocketService = require('../services/websocketService');
       websocketService.notifyPaymentReceived(existingOrder, paymentAmount, transactionId);
-      console.log('Real-time payment notification sent to admin users');
     } catch (wsError) {
       console.error('WebSocket admin payment notification failed:', wsError);
     }
@@ -751,7 +730,6 @@ router.post('/verify', authenticateToken, [
     // Send payment confirmation email
     try {
       await sendPaymentConfirmation(order);
-      console.log('Payment confirmation email sent');
     } catch (emailError) {
       console.error('Payment confirmation email failed:', emailError);
     }
@@ -775,7 +753,6 @@ router.post('/verify', authenticateToken, [
           confirmedAt: new Date()
         }
       });
-      console.log('Customer notification created for order confirmation');
     } catch (notificationError) {
       console.error('Failed to create customer order confirmation notification:', notificationError);
     }
@@ -806,7 +783,6 @@ router.post('/verify', authenticateToken, [
           }
         });
       }
-      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
     } catch (notificationError) {
       console.error('Failed to create admin payment notifications:', notificationError);
     }
@@ -815,7 +791,6 @@ router.post('/verify', authenticateToken, [
     try {
       const websocketService = require('../services/websocketService');
       websocketService.notifyOrderCreated(order);
-      console.log('Real-time payment notification sent to customer');
     } catch (wsError) {
       console.error('WebSocket payment notification failed:', wsError);
     }
@@ -824,7 +799,6 @@ router.post('/verify', authenticateToken, [
     try {
       const websocketService = require('../services/websocketService');
       websocketService.notifyPaymentReceived(order, paymentDetails.payment.amount, razorpayPaymentId);
-      console.log('Real-time payment notification sent to admin users');
     } catch (wsError) {
       console.error('WebSocket admin payment notification failed:', wsError);
     }

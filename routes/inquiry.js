@@ -101,11 +101,6 @@ const handleMulterErrors = (error, req, res, next) => {
 
 // Test endpoint to debug data format
 router.post('/test', upload.array('files', 10), handleMulterErrors, (req, res) => {
-  console.log('Test endpoint - Raw request data:');
-  console.log('Headers:', req.headers);
-  console.log('Body:', req.body);
-  console.log('Files:', req.files);
-  
   res.json({
     success: true,
     message: 'Test endpoint working',
@@ -118,8 +113,6 @@ router.post('/test', upload.array('files', 10), handleMulterErrors, (req, res) =
 // Test Inquiry model creation
 router.post('/test-model', async (req, res) => {
   try {
-    console.log('=== TESTING INQUIRY MODEL ===');
-    
     // Create a minimal test inquiry
     const testInquiry = new Inquiry({
       customer: '507f1f77bcf86cd799439011', // Mock ObjectId
@@ -144,18 +137,7 @@ router.post('/test-model', async (req, res) => {
       specialInstructions: 'Test instructions'
     });
     
-    console.log('Test inquiry before save:', {
-      inquiryNumber: testInquiry.inquiryNumber,
-      customer: testInquiry.customer,
-      partsCount: testInquiry.parts.length
-    });
-    
     await testInquiry.save();
-    
-    console.log('Test inquiry saved successfully:', {
-      id: testInquiry._id,
-      inquiryNumber: testInquiry.inquiryNumber
-    });
     
     res.json({
       success: true,
@@ -181,19 +163,8 @@ router.post('/test-model', async (req, res) => {
 // Debug endpoint - no authentication required
 router.post('/debug', upload.array('files', 10), handleMulterErrors, (req, res) => {
   try {
-    console.log('=== DEBUG ENDPOINT ===');
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-    console.log('Files:', req.files);
-    console.log('Content-Type:', req.headers['content-type']);
-    
     // Validate required fields
     const { parts, deliveryAddress, specialInstructions } = req.body;
-    
-    console.log('=== FIELD ANALYSIS ===');
-    console.log('Parts type:', typeof parts);
-    console.log('Parts value:', parts);
-    console.log('Parts length:', parts ? parts.length : 'undefined');
     
     if (!parts) {
       return res.status(400).json({
@@ -238,10 +209,6 @@ router.post('/debug', upload.array('files', 10), handleMulterErrors, (req, res) 
     let parsedParts, parsedDeliveryAddress;
     try {
       parsedParts = typeof parts === 'string' ? JSON.parse(parts) : parts;
-      console.log('Parsed parts:', parsedParts);
-      console.log('Parsed parts type:', typeof parsedParts);
-      console.log('Parsed parts is array:', Array.isArray(parsedParts));
-      console.log('Parsed parts length:', Array.isArray(parsedParts) ? parsedParts.length : 'not an array');
     } catch (e) {
       return res.status(400).json({
         success: false,
@@ -318,30 +285,9 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
   body('specialInstructions').optional()
 ], async (req, res) => {
   try {
-    console.log('=== INQUIRY CREATION REQUEST ===');
-    console.log('User ID:', req.userId);
-    console.log('Request headers:', req.headers);
-    console.log('Content-Type:', req.headers['content-type']);
-    console.log('Content-Length:', req.headers['content-length']);
-    console.log('Body fields:', Object.keys(req.body));
-    console.log('Files count:', req.files ? req.files.length : 0);
-    
-    if (req.files && req.files.length > 0) {
-      console.log('File details:');
-      req.files.forEach((file, index) => {
-        console.log(`  File ${index + 1}:`, {
-          originalName: file.originalname,
-          filename: file.filename,
-          size: file.size,
-          mimetype: file.mimetype,
-          path: file.path
-        });
-      });
-    }
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      console.log('Validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -366,8 +312,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       });
     }
 
-    console.log('Processing files and data...');
-
     // Process uploaded files
     const files = req.files.map(file => ({
       originalName: file.originalname,
@@ -377,7 +321,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       fileType: path.extname(file.originalname).toLowerCase()
     }));
 
-    console.log('Files processed:', files.length);
 
     // Process Excel files to extract component data (optimized)
     let excelComponents = [];
@@ -389,7 +332,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
         try {
           const excelResult = await processExcelFile(excelFile.filePath);
           if (excelResult.success && excelResult.components.length > 0) {
-            console.log(`Excel file processed: ${excelFile.originalName}, extracted ${excelResult.components.length} components`);
             return excelResult.components;
           }
           return [];
@@ -441,7 +383,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
 
       // Merge Excel components with form parts if available
       if (excelComponents.length > 0) {
-        console.log(`Merging ${excelComponents.length} Excel components with ${processedParts.length} form parts`);
         
         // Create a map of existing parts to avoid duplicates
         const existingPartsMap = new Map();
@@ -465,10 +406,8 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
           }
         });
         
-        console.log(`Final parts count after merge: ${processedParts.length}`);
       }
 
-      console.log('Parts processed:', processedParts.length);
     } catch (parseError) {
       console.error('Parts parsing error:', parseError);
       return res.status(400).json({
@@ -494,7 +433,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
         });
       }
 
-      console.log('Delivery address processed');
     } catch (parseError) {
       console.error('Delivery address parsing error:', parseError);
       return res.status(400).json({
@@ -503,7 +441,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       });
     }
 
-    console.log('Creating inquiry in database...');
 
     // Create inquiry
     const inquiry = new Inquiry({
@@ -515,32 +452,10 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null
     });
 
-    console.log('Inquiry object before save:', {
-      inquiryNumber: inquiry.inquiryNumber,
-      customer: inquiry.customer,
-      partsCount: inquiry.parts.length,
-      filesCount: inquiry.files.length
-    });
-
     await inquiry.save();
-    console.log('Inquiry saved successfully:', inquiry._id);
-    console.log('Inquiry details:', {
-      id: inquiry._id,
-      inquiryNumber: inquiry.inquiryNumber,
-      customer: inquiry.customer,
-      partsCount: inquiry.parts.length,
-      filesCount: inquiry.files.length
-    });
 
     // Populate customer data for notification
     await inquiry.populate('customer', 'firstName lastName email companyName phoneNumber');
-    console.log('Customer data populated for notification:', {
-      inquiryId: inquiry._id,
-      inquiryNumber: inquiry.inquiryNumber,
-      customerName: `${inquiry.customer.firstName} ${inquiry.customer.lastName}`,
-      customerEmail: inquiry.customer.email,
-      customerPhone: inquiry.customer.phoneNumber
-    });
 
     // Send response immediately to user
     res.status(201).json({
@@ -559,7 +474,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
       try {
         // Send email notification to back office
         await sendInquiryNotification(inquiry);
-        console.log('Inquiry notification sent successfully to back office');
       } catch (emailError) {
         console.error('Inquiry notification failed:', emailError);
       }
@@ -588,12 +502,10 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
           });
         }
         
-        console.log(`Created notifications for ${backOfficeUsers.length} back office users`);
         
         // Send real-time WebSocket notification
         try {
           websocketService.notifyNewInquiry(inquiry);
-          console.log('Real-time notification sent via WebSocket');
         } catch (wsError) {
           console.error('WebSocket notification failed:', wsError);
         }
@@ -605,7 +517,6 @@ router.post('/', authenticateToken, upload.array('files', 10), handleMulterError
 
   } catch (error) {
     console.error('Create inquiry error:', error);
-    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -754,6 +665,35 @@ router.get('/admin/:id', authenticateToken, requireBackOffice, async (req, res) 
 });
 
 // Get user's own inquiries (for profile page)
+// Get customer inquiries (for customer profile)
+router.get('/customer', authenticateToken, async (req, res) => {
+  try {
+    // Only allow customers to access their own inquiries
+    if (req.userRole !== 'customer') {
+      return res.status(403).json({
+        success: false,
+        message: 'Customer access required'
+      });
+    }
+
+    const inquiries = await Inquiry.find({ customer: req.userId })
+      .populate('quotation', 'quotationNumber totalAmount status')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      inquiries
+    });
+
+  } catch (error) {
+    console.error('Get customer inquiries error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
 router.get('/my-inquiries', authenticateToken, async (req, res) => {
   try {
     const inquiries = await Inquiry.find({ customer: req.userId })
@@ -1183,7 +1123,6 @@ router.put('/admin/:id', authenticateToken, requireBackOffice, [
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      console.log('Validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Validation failed',

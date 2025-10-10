@@ -287,6 +287,48 @@ const sendPaymentConfirmationSMS = async (order, customerInfo) => {
   }
 };
 
+// Send delivery time notification SMS
+const sendDeliveryTimeNotificationSMS = async (order, customerInfo) => {
+  try {
+    if (!customerInfo.phoneNumber) {
+      console.warn('Customer phone number not available for delivery time SMS');
+      console.log('SMS to Customer: Delivery time updated (phone not available)');
+      return { success: false, message: 'Customer phone not available' };
+    }
+
+    const message = `Delivery time updated for order ${order.orderNumber}. Estimated delivery: ${order.production?.estimatedCompletion ? new Date(order.production.estimatedCompletion).toLocaleDateString() : 'TBD'}. Track your order at ${process.env.CLIENT_URL || 'http://localhost:3000'}/order/${order._id}/tracking`;
+    
+    const result = await sendSMS(customerInfo.phoneNumber, message);
+    console.log('Delivery time notification SMS result:', result);
+    return result;
+
+  } catch (error) {
+    console.error('Delivery time notification SMS failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Send delivery confirmation SMS
+const sendDeliveryConfirmationSMS = async (order, customerInfo) => {
+  try {
+    if (!customerInfo.phoneNumber) {
+      console.warn('Customer phone number not available for delivery confirmation SMS');
+      console.log('SMS to Customer: Order delivered (phone not available)');
+      return { success: false, message: 'Customer phone not available' };
+    }
+
+    const message = `Order ${order.orderNumber} has been delivered successfully! Thank you for choosing Komacut. We hope you're satisfied with your sheet metal parts.`;
+    
+    const result = await sendSMS(customerInfo.phoneNumber, message);
+    console.log('Delivery confirmation SMS result:', result);
+    return result;
+
+  } catch (error) {
+    console.error('Delivery confirmation SMS failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Initialize Twilio when module is loaded
 initializeTwilio();
 
@@ -298,5 +340,7 @@ module.exports = {
   sendOrderConfirmationSMS,
   sendDispatchNotificationSMS,
   sendPaymentConfirmationSMS,
+  sendDeliveryTimeNotificationSMS,
+  sendDeliveryConfirmationSMS,
   isTwilioConfigured
 };

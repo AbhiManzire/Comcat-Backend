@@ -22,7 +22,7 @@ router.get('/customer', authenticateToken, async (req, res) => {
 
     const orders = await Order.find({ customer: req.userId })
       .populate('customer', 'firstName lastName email companyName')
-      .populate('quotation', 'quotationNumber')
+      .populate('quotation', 'quotationNumber createdAt')
       .populate('inquiry', 'inquiryNumber')
       .sort({ createdAt: -1 });
 
@@ -45,7 +45,7 @@ router.get('/', authenticateToken, requireBackOffice, async (req, res) => {
   try {
     const orders = await Order.find()
       .populate('customer', 'firstName lastName email companyName')
-      .populate('quotation', 'quotationNumber')
+      .populate('quotation', 'quotationNumber createdAt')
       .populate('inquiry', 'inquiryNumber')
       .sort({ createdAt: -1 });
 
@@ -121,9 +121,11 @@ router.post('/', authenticateToken, [
       payment: {
         method: paymentMethod === 'online' ? 'credit_card' : paymentMethod === 'direct' ? 'direct' : 'pending',
         status: paymentMethod === 'online' ? 'pending' : 'completed',
-        amount: totalAmount || quotation.totalAmount
+        amount: totalAmount || quotation.totalAmount,
+        paidAt: paymentMethod !== 'online' ? new Date() : null
       },
       status: paymentMethod === 'online' ? 'pending' : 'confirmed',
+      confirmedAt: paymentMethod !== 'online' ? new Date() : null,
       deliveryAddress: deliveryAddress || inquiry.deliveryAddress,
       specialInstructions: inquiry.specialInstructions
     });
@@ -143,7 +145,6 @@ router.post('/', authenticateToken, [
     try {
       const { sendPaymentConfirmation } = require('../services/emailService');
       await sendPaymentConfirmation(order);
-      console.log('Payment confirmation email sent to admin for order:', order.orderNumber);
     } catch (emailError) {
       console.error('Payment confirmation email failed:', emailError);
       // Don't fail the operation if email fails
@@ -177,7 +178,6 @@ router.post('/', authenticateToken, [
           confirmedAt: new Date()
         }
       });
-      console.log('Customer notification created for order confirmation');
     } catch (notificationError) {
       console.error('Failed to create customer order confirmation notification:', notificationError);
     }
@@ -207,7 +207,6 @@ router.post('/', authenticateToken, [
           }
         });
       }
-      console.log(`Admin notifications created for ${adminUsers.length} admin users`);
     } catch (notificationError) {
       console.error('Failed to create admin payment notifications:', notificationError);
     }
@@ -216,7 +215,6 @@ router.post('/', authenticateToken, [
     try {
       const websocketService = require('../services/websocketService');
       websocketService.notifyOrderCreated(order);
-      console.log('Real-time order notification sent to customer');
     } catch (wsError) {
       console.error('WebSocket order notification failed:', wsError);
     }
@@ -225,7 +223,6 @@ router.post('/', authenticateToken, [
     try {
       const websocketService = require('../services/websocketService');
       websocketService.notifyPaymentReceived(order, order.totalAmount, `dummy_${order._id}`);
-      console.log('Real-time payment notification sent to admin users');
     } catch (wsError) {
       console.error('WebSocket admin payment notification failed:', wsError);
     }
@@ -264,13 +261,13 @@ router.get('/:id', authenticateToken, async (req, res) => {
       // Search by MongoDB ObjectId
       order = await Order.findById(id)
         .populate('customer', 'firstName lastName email companyName phone')
-        .populate('quotation', 'quotationNumber parts totalAmount')
+        .populate('quotation', 'quotationNumber parts totalAmount createdAt')
         .populate('inquiry', 'inquiryNumber files parts deliveryAddress specialInstructions');
     } else {
       // Search by order number
       order = await Order.findOne({ orderNumber: id })
         .populate('customer', 'firstName lastName email companyName phone')
-        .populate('quotation', 'quotationNumber parts totalAmount')
+        .populate('quotation', 'quotationNumber parts totalAmount createdAt')
         .populate('inquiry', 'inquiryNumber files parts deliveryAddress specialInstructions');
     }
 
@@ -341,13 +338,37 @@ router.put('/:id/delivery-time', authenticateToken, requireBackOffice, [
 
     await order.save();
 
-    // Send delivery confirmation email to customer
+    // Send delivery time notification to customer
     try {
-      await sendOrderConfirmation(order);
-      console.log('Order confirmation email sent to customer:', order.customer.email);
+      const { sendDeliveryTimeNotification } = require('../services/emailService');
+      await sendDeliveryTimeNotification(order);
+      console.log('Delivery time notification sent to customer:', order.customer.email);
     } catch (emailError) {
-      console.error('Delivery confirmation email failed:', emailError);
+      console.error('Delivery time notification failed:', emailError);
       // Don't fail the operation if email fails
+    }
+
+    // Create notification for customer about delivery time update
+    try {
+      const Notification = require('../models/Notification');
+      await Notification.createNotification({
+        title: 'Delivery Time Updated',
+        message: `Delivery time has been updated for order ${order.orderNumber}. Estimated delivery: ${new Date(estimatedDelivery).toLocaleDateString()}. Your order is now in production.`,
+        type: 'info',
+        userId: order.customer._id,
+        relatedEntity: {
+          type: 'order',
+          entityId: order._id
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          estimatedDelivery: estimatedDelivery,
+          status: order.status,
+          updatedAt: new Date()
+        }
+      });
+    } catch (notificationError) {
+      console.error('Failed to create delivery time notification:', notificationError);
     }
 
     res.json({
@@ -438,6 +459,14 @@ router.put('/:id/status', authenticateToken, requireBackOffice, [
 
     await order.save();
 
+    // Send real-time WebSocket notification for status update
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyOrderStatusUpdate(order, oldStatus, status);
+    } catch (wsError) {
+      console.error('WebSocket status update notification failed:', wsError);
+    }
+
     // Send status update email to customer
     try {
       await sendOrderConfirmation(order);
@@ -447,26 +476,39 @@ router.put('/:id/status', authenticateToken, requireBackOffice, [
       // Don't fail the operation if email fails
     }
 
-    // Create notification for customer if status changed to dispatched
-  // Create notification for customer if status changed to dispatched
-if (status === 'dispatched' && oldStatus !== 'dispatched') {
-  await Notification.createNotification({
-    title: 'Order Dispatched',
-    message: `Your order ${order.orderNumber} has been dispatched! ${order.dispatch && order.dispatch.trackingNumber ? `Tracking Number: ${order.dispatch.trackingNumber}` : ''} ${order.dispatch && order.dispatch.courier ? `Courier: ${order.dispatch.courier}` : ''}.`,
-    type: 'success',
-    userId: order.customer._id,
-    relatedEntity: {
-      type: 'order',
-      entityId: order._id
-    },
-    metadata: {
-      orderNumber: order.orderNumber,
-      trackingNumber: order.dispatch ? order.dispatch.trackingNumber : null,
-      courier: order.dispatch ? order.dispatch.courier : null,
-      dispatchedAt: new Date()
+    // Send delivery time notification if delivery time was updated
+    if (status === 'confirmed' && order.production?.estimatedCompletion) {
+      try {
+        const { sendDeliveryTimeNotification } = require('../services/emailService');
+        await sendDeliveryTimeNotification(order);
+        console.log('Delivery time notification sent to customer:', order.customer.email);
+      } catch (deliveryEmailError) {
+        console.error('Delivery time notification failed:', deliveryEmailError);
+        // Don't fail the operation if email fails
+      }
     }
-  });
-}
+
+    // Create notification for customer if status changed to dispatched
+    // Note: Dispatch notifications are handled in dispatch.js to avoid duplicates
+    if (status === 'dispatched' && oldStatus !== 'dispatched') {
+      // Only create notification if dispatch details are not available (manual status update)
+      if (!order.dispatch || !order.dispatch.trackingNumber) {
+        await Notification.createNotification({
+          title: 'Order Dispatched',
+          message: `Your order ${order.orderNumber} has been dispatched! We will update you with tracking details soon.`,
+          type: 'success',
+          userId: order.customer._id,
+          relatedEntity: {
+            type: 'order',
+            entityId: order._id
+          },
+          metadata: {
+            orderNumber: order.orderNumber,
+            dispatchedAt: new Date()
+          }
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -534,6 +576,14 @@ router.put('/:id/dispatch', authenticateToken, requireBackOffice, [
     order.updatedAt = new Date();
     await order.save();
 
+    // Send real-time WebSocket notification for dispatch update
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyDispatchUpdate(order);
+    } catch (wsError) {
+      console.error('WebSocket dispatch notification failed:', wsError);
+    }
+
     // Send dispatch notification email to customer
     try {
       await sendOrderConfirmation(order);
@@ -543,12 +593,12 @@ router.put('/:id/dispatch', authenticateToken, requireBackOffice, [
       // Don't fail the operation if email fails
     }
 
-    // Create notification for customer
+    // Create notification for customer about dispatch details update
     try {
       await Notification.createNotification({
-        title: 'Order Dispatched',
-        message: `Your order ${order.orderNumber} has been dispatched! Tracking Number: ${order.dispatch.trackingNumber}, Courier: ${order.dispatch.courier}. Estimated delivery: ${order.dispatch.estimatedDelivery ? new Date(order.dispatch.estimatedDelivery).toLocaleDateString() : 'TBD'}.`,
-        type: 'success',
+        title: 'Dispatch Details Updated',
+        message: `Dispatch details have been updated for order ${order.orderNumber}. Tracking Number: ${order.dispatch.trackingNumber}, Courier: ${order.dispatch.courier}. Estimated delivery: ${order.dispatch.estimatedDelivery ? new Date(order.dispatch.estimatedDelivery).toLocaleDateString() : 'TBD'}.`,
+        type: 'info',
         userId: order.customer._id,
         relatedEntity: {
           type: 'order',
@@ -559,13 +609,13 @@ router.put('/:id/dispatch', authenticateToken, requireBackOffice, [
           trackingNumber: order.dispatch.trackingNumber,
           courier: order.dispatch.courier,
           estimatedDelivery: order.dispatch.estimatedDelivery,
-          dispatchedAt: order.dispatch.dispatchedAt
+          updatedAt: new Date()
         }
       });
       
-      console.log(`Created dispatch notification for customer: ${order.customer.email}`);
+      console.log(`Created dispatch details update notification for customer: ${order.customer.email}`);
     } catch (notificationError) {
-      console.error('Failed to create dispatch notification:', notificationError);
+      console.error('Failed to create dispatch details update notification:', notificationError);
       // Don't fail the operation if notification creation fails
     }
 

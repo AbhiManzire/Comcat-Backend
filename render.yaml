@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: komacut-backend
+    name: cutbend-backend
     env: node
     plan: free
     buildCommand: npm install

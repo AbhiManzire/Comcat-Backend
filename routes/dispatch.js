@@ -81,12 +81,33 @@ router.post('/:orderId', authenticateToken, requireBackOffice, [
     order.updatedAt = new Date();
     await order.save();
 
+    // Send real-time WebSocket notification for dispatch update
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyDispatchUpdate(order);
+    } catch (wsError) {
+      console.error('WebSocket dispatch notification failed:', wsError);
+    }
+
     // Send dispatch notification email to customer
     try {
       await sendDispatchNotification(order);
       console.log('Dispatch notification email sent to customer:', order.customer.email);
     } catch (emailError) {
       console.error('Dispatch notification email failed:', emailError);
+    }
+
+    // Send dispatch notification SMS to customer
+    try {
+      const { sendDispatchNotificationSMS } = require('../services/smsService');
+      const smsResult = await sendDispatchNotificationSMS(order, order.customer);
+      if (smsResult.success) {
+        console.log('Dispatch notification SMS sent to customer:', order.customer.phoneNumber);
+      } else {
+        console.log('Dispatch notification SMS failed:', smsResult.message);
+      }
+    } catch (smsError) {
+      console.error('Dispatch notification SMS failed:', smsError);
     }
 
     // Create notification for customer
@@ -235,6 +256,59 @@ router.post('/:orderId/delivered', authenticateToken, requireBackOffice, [
 
     order.updatedAt = new Date();
     await order.save();
+
+    // Send real-time WebSocket notification for delivery confirmation
+    try {
+      const websocketService = require('../services/websocketService');
+      websocketService.notifyOrderStatusUpdate(order, 'dispatched', 'delivered');
+    } catch (wsError) {
+      console.error('WebSocket delivery notification failed:', wsError);
+    }
+
+    // Send delivery confirmation email to customer
+    try {
+      const { sendDeliveryConfirmation } = require('../services/emailService');
+      await sendDeliveryConfirmation(order);
+      console.log('Delivery confirmation email sent to customer:', order.customer.email);
+    } catch (emailError) {
+      console.error('Delivery confirmation email failed:', emailError);
+    }
+
+    // Send delivery confirmation SMS to customer
+    try {
+      const { sendDeliveryConfirmationSMS } = require('../services/smsService');
+      const smsResult = await sendDeliveryConfirmationSMS(order, order.customer);
+      if (smsResult.success) {
+        console.log('Delivery confirmation SMS sent to customer:', order.customer.phoneNumber);
+      } else {
+        console.log('Delivery confirmation SMS failed:', smsResult.message);
+      }
+    } catch (smsError) {
+      console.error('Delivery confirmation SMS failed:', smsError);
+    }
+
+    // Create notification for customer about delivery confirmation
+    try {
+      const Notification = require('../models/Notification');
+      await Notification.createNotification({
+        title: 'Order Delivered',
+        message: `Your order ${order.orderNumber} has been delivered successfully! Thank you for choosing Komacut. We hope you're satisfied with your sheet metal parts.`,
+        type: 'success',
+        userId: order.customer._id,
+        relatedEntity: {
+          type: 'order',
+          entityId: order._id
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          actualDelivery: order.dispatch.actualDelivery,
+          status: order.status,
+          deliveredAt: new Date()
+        }
+      });
+    } catch (notificationError) {
+      console.error('Failed to create delivery confirmation notification:', notificationError);
+    }
 
     res.json({
       success: true,

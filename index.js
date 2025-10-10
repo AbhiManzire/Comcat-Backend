@@ -92,7 +92,7 @@ app.use('/test-files', express.static('test-files'));
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Komacut Server is running' });
+  res.json({ status: 'OK', message: 'Cutbend Server is running' });
 });
 
 // Test endpoint for debugging
@@ -134,7 +134,6 @@ mongoose.connect(MONGODB_URI, {
   socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
 })
 .then(() => {
-  console.log('Connected to MongoDB');
   
   // Import models first
   require('./models/User');
@@ -193,10 +192,7 @@ mongoose.connect(MONGODB_URI, {
 })
 .catch((error) => {
   console.error('MongoDB connection error:', error);
-  console.error('Please ensure MongoDB is running and accessible');
-  console.error('If using MongoDB Atlas, check your network access and connection string');
-  console.error('If using local MongoDB, ensure MongoDB service is running');
-  
+ 
   // Exit process if MongoDB connection fails
   process.exit(1);
 });
